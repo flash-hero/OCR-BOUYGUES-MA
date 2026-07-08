@@ -1,219 +1,162 @@
-# Plan de travail — Moteur OCR eDoc
-**PFA Oussama — Bouygues Construction IT Maroc**
-Version 1.0 — 03/07/2026 · Échéance : 20/07/2026 · Encadrant : M. Boumenzeh
+# Plan de travail v4 — Détection de cartouche + classification générique
+**Une architecture indépendante du projet eDoc**
+PFA Oussama — Bouygues Construction IT Maroc · Encadrant : M. Boumenzeh
+Version 4.0
 
 ---
 
-## 1. Objectif et livrables
+## 0. Le principe, en clair
 
-| Livrable | Description | Critère d'acceptation |
+Jusqu'ici, le pipeline posait une question fermée à l'OCR : "quelle est la valeur de PHASE ? de EMETTEUR ? de LOT ?" — en supposant que ces champs-là, avec ces noms-là, existent partout. Les captures eDoc montrent que ce n'est pas vrai : chaque projet configure sa propre liste de champs ("Codification" + "Champs personnalisés"). Rien ne garantit qu'un projet non encore vu n'a pas une liste encore différente.
+
+Le nouveau principe sépare deux questions qui étaient mélangées en une seule :
+
+1. **Lire** : dans le cartouche, quels libellés et quelles valeurs sont écrits — peu importe lesquels. On copie tout, tel quel.
+2. **Classer** : une fois la copie brute obtenue, on la trie dans les bonnes cases — mais "les bonnes cases" dépendent du projet en question.
+
+Analogie : au lieu de donner à quelqu'un un formulaire aux cases déjà nommées ("Nom : ___, Prénom : ___") et de lui demander de le remplir depuis un document, on lui demande d'abord de recopier fidèlement tout ce qui est écrit dans le bloc d'identification — chaque étiquette avec sa valeur, sans interpréter. Ensuite, dans un second temps séparé, on prend cette copie brute et on la range dans le bon formulaire — celui du client en question, puisque chaque client a le sien.
+
+Ce n'est pas une remise à zéro : ce qui a été construit reste utilisable, juste repositionné. Détail module par module en §2.
+
+---
+
+## 1. Ce qui motive le changement
+
+- **Liste des projets (eDoc)** : "New Projet - Mtbc Buche" — le projet dont viennent les 8 tables de référence déjà construites — n'est qu'un projet parmi au moins 9. "Futur Palais de Justice de Paris" en est un autre, séparé.
+- **Configuration "Tables Plan" par projet** : deux captures d'écran montrent deux configurations différentes de la section Codification — Phase/Emetteur/Lot/Niveau/Type d'un côté, les mêmes + **Bâtiment** de l'autre. La liste des champs n'est pas fixe d'un projet à l'autre.
+
+Conséquence concrète déjà vérifiée : le document "6.pdf" du corpus de 27 est explicitement un document du projet **Futur Palais de Justice de Paris** (son cartouche l'indique). Le corpus de 27 documents est confirmé comme un **échantillon d'inspiration et de test hétérogène** — pas nécessairement un seul projet eDoc, potentiellement plusieurs. Ce n'est plus un point bloquant : c'est même une bonne nouvelle pour valider la généricité de l'architecture (§0) sur des documents réellement variés, plutôt qu'un biais à corriger.
+
+---
+
+## 2. Architecture — 7 modules
+
+| Module | Rôle | Change par rapport à avant ? |
 |---|---|---|
-| Prototype fonctionnel | Pipeline complet : document → JSON au schéma Bordereau → API REST | Un fichier soumis via l'API ressort avec les 8 champs cibles + statuts de confiance |
-| Rapport d'architecture justifiée | Document (FR) comparant cascade vs outils seuls, chiffres à l'appui | Chaque décision d'architecture est adossée à une mesure sur le dataset |
-| Démo | Scénario reproductible devant l'encadrant | Upload d'un doc de chaque famille → résultat en direct |
+| P0 — Ingestion & routage | Format, page 1 | Inchangé |
+| P1 — Préparation | Orientation, rendu image | Inchangé |
+| P2 — Détection + extraction générique | Localiser le cartouche, en sortir tous les libellés/valeurs, sans schéma nommé à l'avance | Change de nature — détaillé en §3 |
+| P3 — Classification | Ranger chaque (libellé, valeur) brut dans le bon champ cible, selon **la liste de champs requis reçue dans l'appel API** | Nouveau module — détaillé en §4 |
+| P4 — Validation | Matching flou contre les tables de référence du champ classé ; règle D11 inchangée | Même logique qu'avant |
+| P5 — API REST | Reçoit **le document ET la liste des champs obligatoires à extraire** (fournie par l'appelant — confirmé par Oussama, ça diffère par projet côté eDoc mais ce n'est plus notre problème à déduire) → résultat par champ | Confirmé : pas de logique de détection de projet à construire, l'appelant nous dit quoi chercher |
+| P6 — Harnais d'évaluation | Comparatif Tesseract / Mistral, précision par champ | Inchangé dans l'esprit |
 
-Schéma de sortie cible (confirmé par le fichier Bordereau eDoc) :
-`PHASE, EMETTEUR, LOT, TYPE, ZONE, NIVEAU, NUMERO, Titre1` (obligatoires) + `Indice` (import indicé) + `Titre2/Titre3` (optionnels). Les champs hors schéma présents sur certains cartouches (PROJET, Commune, Secteur…) sont capturés en métadonnées, pas forcés dans le schéma.
+Ce qui **ne change pas** : le principe "un lecteur, plusieurs vérificateurs" ; la règle D11 (jamais d'auto-validation sans match, sur aucun champ) ; les deux procédures en test (Tesseract sur page de garde vs Mistral partout, comparées empiriquement) ; les deux familles de documents et leur routage.
 
----
-
-## 2. Décisions d'architecture actées
-
-Chaque ligne est une décision fermée, avec sa justification — c'est la matière première du rapport final.
-
-| # | Décision | Justification / preuve |
-|---|---|---|
-| D1 | Architecture **Option B : cascade avec fail-over** (natif → Tesseract → Mistral vision → Azure DI → revue humaine) | Validée par l'encadrant. Robustesse face à la variabilité du corpus. |
-| D2 | Cloud autorisé (Azure, Mistral API) | Confirmé par l'encadrant. |
-| D3 | **Page 1 uniquement**, un cartouche par document | Confirmé : les cartouches des autres pages sont des doublons. Borne le coût par document à une page. |
-| D4 | Deux familles avec deux stratégies de localisation distinctes | Page de garde : cartouche en bande basse (5/5 confirmés « bas-milieu »). Plan dense : **aucune règle de position fixe possible** — preuves : 7.pdf=bas-gauche, 8.pdf=bas-droite, 11.pdf=bas-droite, 12.pdf=haut-gauche. |
-| D5 | Vérification natif/scanné **au niveau de la zone cartouche**, jamais au niveau page | Piège vérifié : un PDF peut être natif globalement avec un cartouche inséré en image (tampon BPE, scan). |
-| D6 | Correction d'orientation **systématique et en amont** de la localisation, pour les deux familles | Cas réel observé : plan pivoté à 90°, cartouche « déplacé » de bas-droite vers haut-droite. Chaîne : attribut PDF `/Rotate` → OSD Tesseract → force brute 4 rotations sur zones candidates si OSD peu confiant. |
-| D7 | Nom de fichier = signal d'appoint, **jamais vérité terrain** | Preuve : doc Antonypôle, nom de fichier ≠ Code GED imprimé au cartouche. |
-| D8 | Tables de référence = **signal de confiance souple**, pas filtre strict | Les tables contiennent elles-mêmes du bruit (anomalie CO_NB : entrée « I → INF » doublonnant « INF → Infrastructure »). Non-match ⇒ baisse de confiance + revue, pas rejet. |
-| D9 | Escalade de la cascade **décidée par champ, exécutée par appel groupé par outil** | Si seul NUMERO échoue au niveau Tesseract, seuls les champs non résolus escaladent — mais un seul appel Mistral/Azure sur le crop cartouche couvre tous les champs en attente (les API facturent à la page/l'appel, pas au champ). |
-| D10 | Seuils de confiance **propres à chaque outil**, jamais partagés | Les échelles de confiance Tesseract / Azure / LLM ne sont pas comparables. Calibrage sur dataset annoté, stocké en config, pas en dur. |
-| D11 | Sortie LLM sur champ codé **jamais auto-validée sans match table** | Risque d'hallucination plausible. Le vrai signal de confiance d'une valeur Mistral = son match (fuzzy) contre la table de référence, pas sa « certitude » auto-déclarée. |
-| D12 | Intégration eDoc (Angular/Java) et contrat API final = **hors scope 20/07** | Reporté par l'encadrant (« étape par étape »). L'API expose un JSON stable ; l'adaptation au contrat eDoc sera un mapping ultérieur. |
-| D13 | Ordre de cascade configurable, ordre par défaut = D1 | L'évaluation (M8) vérifiera empiriquement si Mistral-avant-Azure est optimal ; l'ordre vit en config, le rapport tranche sur chiffres. |
+Ce qui **est déjà résolu par ce changement**, sans travail supplémentaire : CO_NB n'est plus une question à part. C'est simplement une entrée de plus dans la configuration du projet Mtbc Buche (section Champs personnalisés) — rien de spécial à coder pour lui.
 
 ---
 
-## 3. Architecture du pipeline — spécification par module
+## 3. P2 — Détection de cartouche + extraction générique
 
-Chaque module = un package du repo. Entrées/sorties explicites pour que l'implémentation (Claude Code) soit mécanique.
-
-### M0 — Ingestion & routage de format
-- **Entrée** : fichier (PDF / DOCX / XLSX). **Sortie** : objet `Document{path, format, route}`.
-- DOCX → extraction texte directe (`python-docx`) → M5. XLSX → `openpyxl` → M5. PDF → M1.
-- Rejet propre des formats inconnus (erreur API 422, pas de crash).
-
-### M1 — Isolation page 1 + orientation
-- Charger **uniquement la page 1** (PyMuPDF), quel que soit le nombre total de pages.
-- Orientation : (1) lire l'attribut `/Rotate` de la page et normaliser ; (2) si scan ou attribut absent : OSD Tesseract sur la page rendue basse résolution ; (3) si confiance OSD < seuil : ne pas forcer — la rotation sera résolue en M2 par force brute sur les zones candidates.
-- **Sortie** : image page 1 normalisée + drapeau `orientation_confidence`.
-
-### M2 — Classification de famille + localisation du cartouche
-- Heuristique de famille : taille/orientation de page (A4 portrait → probable page de garde ; ≥A2 → probable plan dense). **Signal, pas règle** — la localisation qui suit doit réussir même si l'heuristique se trompe.
-- **Page de garde** : traiter la page entière (A4 = peu coûteux) avec ciblage prioritaire de la bande basse.
-- **Plan dense** :
-  1. Recherche d'ancres dans le **texte natif** (`pdfplumber.extract_words()` avec coordonnées) — indépendante de la position du cartouche sur la page.
-  2. Sinon : crop des **4 coins**, passage Tesseract rapide basse résolution sur chaque coin (aux 4 rotations si `orientation_confidence` faible), le coin totalisant le plus d'ancres gagne.
-  3. Re-crop haute résolution (rendu ~300 DPI de la zone) du coin gagnant.
-- **Règle anti-faux-positif** : une zone n'est retenue que si ≥ 3 libellés-ancres distincts y sont détectés à proximité les uns des autres (un mot isolé du dessin ne suffit jamais).
-- **Sortie** : `CartoucheZone{bbox, family, position, rotation_applied}`.
-
-### M3 — Vérification natif/scanné (niveau zone)
-- Sur la bbox du cartouche uniquement : présence de texte natif exploitable ?
-- Oui → extraction native (niveau 0 de la cascade, gratuite et instantanée).
-- Non, ou zone couverte par un objet image → rasterisation de la zone → cascade OCR.
-- **Filet de sécurité par champ** : après extraction native, tout champ attendu ressortant vide ou non matché retombe individuellement dans la cascade (cas hybride : cadre natif + valeur tamponnée en image).
-
-### M4 — Cascade d'extraction (cœur du système)
-Niveaux, dans l'ordre par défaut (configurable, cf. D13) :
-
-| Niveau | Outil | Coût | Rôle |
-|---|---|---|---|
-| 0 | Texte natif PDF | 0 | Premier palier gratuit quand disponible |
-| 1 | Tesseract (local) | 0 | OCR de base sur crop prétraité (niveaux de gris, seuillage adaptatif, upscale si besoin) |
-| 2 | Mistral vision (API) | € | Re-vérification **sur l'image du crop** (jamais correction texte-seule), sortie JSON structurée |
-| 3 | Azure Document Intelligence (API) | € | Modèle layout/document généraliste, fort sur tableaux et paires clé-valeur |
-| 4 | Drapeau revue humaine | — | Statut `TO_REVIEW` dans la sortie API |
-
-- Escalade par champ, exécution groupée par outil (D9).
-- **Cache obligatoire des réponses brutes** de chaque outil par (document, niveau) : les itérations d'évaluation ne re-consomment ni quota ni budget.
-- Format de sortie normalisé commun aux 4 niveaux :
+### Pour Mistral OCR
+Le schéma `document_annotation_format` change de forme : au lieu de propriétés nommées (`PHASE`, `EMETTEUR`...), un schéma ouvert, par exemple :
 ```
-ExtractionRecord {
-  field, value_raw, value_normalized,
-  source_tool, tool_confidence,        # échelle propre à l'outil
-  table_match_score,                   # fuzzy vs table de référence (null si champ libre)
-  final_confidence, status             # AUTO_VALIDATED | TO_REVIEW | MISSING
+{
+  "cartouche_trouve": bool,
+  "champs": [ { "libelle": string, "valeur": string } ]
 }
 ```
+Le `document_annotation_prompt` guide la détection : repérer le bloc d'identification (cartouche), recopier chaque libellé avec sa valeur telle qu'imprimée, sans interpréter ni renommer. C'est un changement de schéma, pas de changement d'outil. `include_blocks` (bounding boxes) reste utile pour vérifier où le modèle a situé le cartouche.
 
-### M5 — Structuration
-- **Dictionnaire d'ancres/synonymes** (config YAML, deux sections : `confirmés` / `hypothèses à valider`) :
-  - NUMERO ← N° DOC, N°DOC, N° GED, N° Chrono, N° document, NUM
-  - Indice ← Ind, IND, IND.
-  - NIVEAU ← Niveau, Niveaux, NIV · ZONE ← Zone, ZON · PHASE ← Phase, PHA · EMETTEUR ← Emetteur, Émetteur, EMET · TYPE ← Type, TYP · LOT ← Lot
-  - Hypothèses à valider avant mapping : Spécialité→LOT ?, Discipline→LOT ?, Localisation→ZONE ?, DOC→TYPE ? (cartouches Abidjan / Grand Paris). Libellé non mappable ⇒ métadonnée + drapeau, jamais de mapping forcé.
-- **Titre1** : pas de table de référence (champ libre). Ancres : Désignation, Objet, Titre + heuristique « plus grand bloc texte du cartouche hors tableau codé ». Champ le plus difficile — assumé dans l'évaluation.
-- **Matching flou** (RapidFuzz/Levenshtein) aux deux étages : reconnaissance de libellé ET validation de valeur.
-- **Normalisation** avant comparaison : casse, espaces, zéros de tête de NUMERO (« 085 » vs « 85 » — convention canonique unique appliquée à la fois aux prédictions et à la vérité terrain ; convention exacte à confirmer, cf. §10).
+### Pour Tesseract
+Plus difficile : Tesseract n'a pas de compréhension sémantique, il ne peut pas "reconnaître un cartouche" comme concept. Détection structurelle nécessaire :
+- Détection de grille/tableau via OpenCV (contours ou détection de lignes) — un cartouche est presque toujours une boîte à bordures avec des lignes internes, ce qui le distingue visuellement du reste de la page.
+- Une fois la zone candidate trouvée, OCR de cette zone avec `pytesseract` en **`lang='fra+eng'`** (pas seulement `fra`) — le corpus montre des libellés anglais ponctuels ("As indicated", "LEVEL"), puis appariement libellé/valeur par géométrie (colonne gauche = libellé / colonne droite = valeur, ou libellé au-dessus / valeur en dessous selon le gabarit).
 
-### M6 — Confiance & décision
-- `final_confidence` par champ = combinaison (pondérée, en config) de : confiance outil normalisée + score de match table + accord inter-niveaux si plusieurs ont tourné.
-- Statuts : `AUTO_VALIDATED` (≥ seuil haut) / `TO_REVIEW` (zone grise) / `MISSING` (champ absent du document).
-- Seuils calibrés en M8, stockés dans `config/thresholds.yaml`.
-
-### M7 — API REST (FastAPI)
-- `POST /extractions` (multipart) → `202 { job_id }` — asynchrone dès le départ (volume élevé attendu).
-- `GET /extractions/{job_id}` → `{ status, result }` où `result` = schéma Bordereau + par champ : valeur, confiance, statut, outil source + métadonnées document (famille, position cartouche, rotation appliquée, temps, niveaux utilisés).
-- Traitement en arrière-plan : `BackgroundTasks` FastAPI suffit pour le prototype. Celery/Redis = chemin d'évolution documenté, **pas implémenté** (sur-ingénierie vs 20/07).
-- Secrets (clés Azure/Mistral) : variables d'environnement uniquement, jamais dans le code ni le repo.
-
-### M8 — Harnais d'évaluation
-- Script : pipeline sur tout le dataset → comparaison à la vérité terrain (Excel) → tableaux de métriques (cf. §6).
-- Produit directement les tableaux du rapport d'architecture. C'est un module de première classe, pas un script jetable.
+**À ne pas sous-estimer** : au moins deux mises en page de cartouche coexistent dans le corpus (libellé à gauche de la valeur sur une ligne ; libellé au-dessus de la valeur sur deux lignes — vu sur le document Palais de Justice). L'heuristique d'appariement doit gérer les deux, ou détecter laquelle s'applique avant d'apparier. C'est un vrai sujet d'itération empirique, pas un détail d'implémentation.
 
 ---
 
-## 4. Structure du repo (référence pour Claude Code)
+## 4. P3 — Classification (nouveau module)
 
-```
-edoc-ocr/
-├── src/
-│   ├── ingestion/        # M0, M1 : routage format, page 1, orientation
-│   ├── localization/     # M2 : famille, ancres, 4 coins
-│   ├── extraction/       # M3, M4 : natif, tesseract, mistral, azure, orchestrateur cascade, cache
-│   ├── structuration/    # M5 : mapping libellés, validation valeurs, normalisation
-│   ├── scoring/          # M6 : confiance finale, statuts
-│   ├── api/              # M7 : FastAPI, schémas Pydantic, jobs
-│   └── evaluation/       # M8 : harnais, métriques
-├── config/
-│   ├── anchors.yaml      # dictionnaire libellés (confirmés / hypothèses)
-│   ├── thresholds.yaml   # seuils par outil + pondérations confiance
-│   ├── cascade.yaml      # ordre des niveaux
-│   └── reference_tables/ # Phase, Niveau, Zone, Type, CO_NB, Emetteur*, Lot* (CSV)
-├── data/
-│   ├── raw/              # documents du dataset
-│   ├── annotations.xlsx  # vérité terrain
-│   └── cache/            # réponses brutes API par (doc, outil)
-└── tests/
-```
-Conventions : code, commentaires, identifiants en **anglais** ; documentation et rapport en **français**.
+**Mécanisme confirmé par Oussama** : l'appel API fournit le document **et** la liste des champs obligatoires à extraire pour cet appel — c'est l'appelant (eDoc) qui porte la différence entre projets, pas notre pipeline. On n'a donc pas besoin de deviner ou de récupérer une configuration de projet : on reçoit directement quoi chercher.
+
+Entrée : liste de paires (libellé brut, valeur brute, confiance) issues de P2, plus la liste des champs requis pour cet appel (reçue via l'API, pas déduite).
+Sortie : chaque paire rangée sur un champ requis si elle correspond, ou classée "hors schéma" sinon (jamais perdue, jamais forcée dans le mauvais champ).
+
+Mécanique : RapidFuzz compare chaque libellé brut aux synonymes connus pour chaque nom de champ **demandé dans cet appel**. Meilleur score au-dessus du seuil → classé. Rien au-dessus du seuil → hors schéma.
+
+Deux usages de RapidFuzz à ne pas confondre dans le code :
+- **P3 (classification)** compare un *libellé* (ex. "N° Doc") à une liste de synonymes de champ
+- **P4 (validation)** compare une *valeur* (ex. "EX3") à une table de référence
+
+**Conséquence de conception, plus simple que prévu initialement** : `schema_fields.yaml` peut rester **une seule bibliothèque partagée** (nom de champ → synonymes de libellés), pas un fichier par projet — puisque le même nom de champ ("Emetteur", "Bâtiment"...) a probablement le même sens et les mêmes synonymes partout, peu importe le projet qui le demande. Ce que chaque appel API change, c'est **quel sous-ensemble** de cette bibliothèque est actif pour cet appel-là, pas le contenu des synonymes eux-mêmes. À enrichir au fil de l'eau si un nouveau nom de champ apparaît (ex. "Bâtiment" à ajouter dès maintenant, vu dans les captures).
+
+**Confirmé, avec l'exemple qui le précise** : si l'API demande `NUMERO` et `NIVEAU`, et que le document imprime "NUM" et "LEVEL", ce n'est pas une comparaison exacte de chaînes qui doit décider si le champ est trouvé ou `MISSING` — c'est le même mécanisme de correspondance floue (RapidFuzz contre les synonymes de `schema_fields.yaml`) qui s'en charge. Rien de nouveau à construire : c'est exactement ce que ce module fait déjà. Ce qui change, c'est qu'il faut être vigilant à ne **jamais** implémenter cette étape en comparaison stricte (`==`) entre le nom de champ demandé et le libellé lu — ce serait le bug qui ferait passer un champ réellement présent en `MISSING` à tort. Statut `MISSING` réservé au cas où même la correspondance floue ne trouve rien d'assez proche.
+
+Détail utile de l'exemple : "LEVEL" est un libellé anglais pour ce qui correspond à NIVEAU — le corpus contient déjà des indices de ça ("As indicated" en anglais vu sur un document). Le lexique de synonymes doit couvrir le anglais autant que les variantes françaises, pas seulement "N° Doc / N° GED / N° Chrono". Ajusté en §3 (OCR Tesseract) et à garder en tête pour peupler `schema_fields.yaml`.
+
+Configuration confirmée : `config/schema_fields.yaml` (bibliothèque partagée de synonymes, un seul fichier, multilingue) + `config/projects/{project_id}/reference_tables/*.csv` (valeurs acceptées, par projet — le project_id arrive bien dans l'appel API, confirmé). Les 8 CSV déjà produits pour Mtbc Buche n'ont pas besoin d'être refaits — juste rangés sous `config/projects/mtbc_buche/`.
 
 ---
 
-## 5. Planning jour par jour (03/07 → 20/07)
+## 5. P4 — Validation (reprend l'existant)
 
-12 jours ouvrés. Week-ends (4-5, 11-12, 18-19/07) = buffer optionnel, pas planifiés.
+Logique identique à ce qui était déjà spécifiée : matching flou contre la table de référence du champ classé, statuts `AUTO_VALIDATED` / `TO_REVIEW` / `MISSING`, règle D11 uniforme (aucun champ n'est un vocabulaire fermé, un non-match déclenche toujours TO_REVIEW, jamais un rejet automatique). **Confirmé** : l'appel API porte le code ou le nom exact du projet, donc P4 sait sans ambiguïté quelle table consulter.
 
-| Jour | Date | Contenu | Jalon / critère de sortie |
+---
+
+## 6. Stack — ce qui s'ajoute ou change de rôle
+
+| Brique | Rôle | Nouveau par rapport à avant ? |
+|---|---|---|
+| Mistral OCR (`document_annotation_format`) | Détection + extraction générique | Même outil, schéma redessiné (ouvert au lieu de nommé) |
+| Tesseract 5 + `pytesseract` | OCR brut sur la zone cartouche détectée | Inchangé |
+| **OpenCV — contours / détection de lignes** | **Détection structurelle du cartouche (Tesseract)** | Rôle élargi — avant, juste prétraitement d'image ; maintenant aussi détection de structure |
+| RapidFuzz | Classification (libellé→champ) **et** validation (valeur→table) | Même librairie, un usage de plus |
+| PyMuPDF | Rendu image, lecture `/Rotate` | Inchangé |
+| `config/schema_fields.yaml` + `config/projects/{id}/reference_tables/` | Synonymes de libellés (bibliothèque partagée) + valeurs acceptées (par projet) | Structure affinée — un seul fichier de synonymes, tables de valeurs toujours par projet |
+
+---
+
+## 7. Étapes de travail
+
+| Étape | Durée | Contenu | Sortie |
 |---|---|---|---|
-| J1 | ven 03/07 | Setup repo + venv + dépendances. **Demander clé Azure DI (tier gratuit F0) et clé Mistral aujourd'hui** (week-end devant). Exporter les tables Emetteur et Lot depuis eDoc. Convertir les 7 tables en CSV config. Relancer l'encadrant pour les documents supplémentaires. | Environnement opérationnel ; appels de test Azure/Mistral passent (ou demande de clés tracée). |
-| J2 | lun 06/07 | M0 + M1 : routage format, chargeur page 1, correction d'orientation (attribut + OSD). | Les 8 docs distincts passent M0-M1 sans erreur ; doc pivoté correctement redressé. |
-| J3 | mar 07/07 | M2 : heuristique famille + localisation (ancres natives + 4 coins). | Position détectée = position annotée dans l'Excel sur les 8 docs. |
-| J4 | mer 08/07 | M3 + niveaux 0-1 : check natif/scanné niveau zone, extracteur natif, connecteur Tesseract (avec prétraitement image), sortie `ExtractionRecord`. | Champs extraits en natif et via Tesseract sur ≥ 1 doc de chaque famille. |
-| J5 | jeu 09/07 | Connecteurs Mistral vision + Azure DI, même format de sortie. Cache des réponses brutes. | Les 4 niveaux produisent des `ExtractionRecord` comparables. |
-| J6 | ven 10/07 | M5 : dictionnaire d'ancres, fuzzy matching libellés + valeurs, normalisation. | **Jalon semaine 1 : chaîne complète (hors cascade) sur 1 doc de chaque famille → JSON Bordereau.** |
-| J7 | lun 13/07 | M4 orchestrateur cascade (escalade par champ, appels groupés, seuils initiaux) + M6 confiance/statuts. | Cascade de bout en bout sur les 8 docs. |
-| J8 | mar 14/07 | M8 harnais + **QA vérité terrain** (annotations validées contre les tables : typos, normalisation NUMERO) + 1er run complet → métriques de base par outil et cascade. Calibrage des seuils. Squelette du rapport créé (les tableaux s'y déverseront). | Tableau baseline : précision par champ, par famille, par outil. |
-| J9 | mer 15/07 | M7 API FastAPI (asynchrone, schémas). Intégration des docs supplémentaires de l'encadrant s'ils sont arrivés. | `POST` + `GET` fonctionnels en local sur un doc réel. |
-| J10 | jeu 16/07 | Journée d'itération : correction des 3 principaux modes d'échec révélés par l'éval (rotations limites, champs hybrides natif/tampon, trous du dictionnaire d'ancres). 2e run d'éval. | Précision en hausse mesurée vs J8 ; échecs restants documentés. |
-| J11 | ven 17/07 | **Gel du code.** Run d'évaluation final → tableaux définitifs. Rédaction du rapport (FR). Option si avance : Dockerfile. | Rapport ≥ 80 % rédigé, métriques finales figées. |
-| J12 | lun 20/07 | Finalisation rapport + préparation démo (scénario : 1 page de garde + 1 plan dense pivoté, en direct via l'API). Livraison. | Démo répétée une fois de bout en bout avant présentation. |
+| É1 | 2 j | Setup (clé Mistral, Tesseract). **Test décisif prioritaire** : Mistral peut-il détecter et extraire le cartouche en libellés/valeurs génériques, sur 2-3 documents des deux familles ? Conditionne tout le reste | Réponse au test décisif ; environnement prêt |
+| É2 | 1 j | P0 (+ identification du projet) + P1 (inchangé) | Tronc d'ingestion prêt |
+| É3 | 3–4 j | P2 : schéma générique côté Mistral ; détection structurelle + OCR + appariement côté Tesseract | Paires (libellé, valeur) brutes sur les documents de test, pour les deux moteurs |
+| É4 | 2 j | P3 : classification, `schema_fields.yaml` par projet | Champs classés par projet |
+| É5 | 1 j | P4 : validation (reprend la logique déjà spécifiée) | Statuts calculés |
+| É6 | 1–2 j | P6 : harnais comparatif Tesseract/Mistral (page de garde) | Tableau comparatif chiffré |
+| É7 | 1–2 j | Itération sur les points faibles mesurés (l'appariement Tesseract en priorité probable) | Précision en hausse |
+| É8 | 1 j | P5 : API REST (+ paramètre projet) | POST/GET fonctionnels |
+| É9 | 1–2 j | Rapport + démo | Livrables prêts |
 
-Chemin critique : **les clés API (J1)**. Sans elles, J5 glisse — mitigation en §7.
+**Total estimé : 13–17 jours ouvrés** — plus que le plan précédent (10–13 j), parce que la détection de cartouche et la classification sont deux problèmes réels de plus à résoudre. En échange : une architecture qui fonctionne sur n'importe quel projet eDoc, pas seulement celui qu'on a sous la main. Si le temps presse, voir §9.
 
 ---
 
-## 6. Méthodologie d'évaluation
+## 8. Questions ouvertes — toutes résolues côté architecture
 
-- **Dataset** : 8 documents distincts actuels (doublons exclus : 13-18.pdf ; sans cartouche exclus : 6.docx, 9, 10.pdf) + documents supplémentaires demandés à l'encadrant (cible ≥ 20). Les proportions page de garde / plan dense doivent refléter le corpus réel.
-- **QA de la vérité terrain (J8)** : chaque annotation de champ codé est confrontée aux tables de référence ; les écarts (ex. NIVEAU=TTT absent de la table, NUMERO 85 vs 085) sont tranchés avant tout calibrage — on ne calibre pas sur une référence douteuse.
-- **Métriques** :
-  - Précision **par champ** : correspondance exacte après normalisation pour les champs codés ; similarité normalisée ≥ seuil pour Titre1 (champ libre).
-  - Ventilée **par famille** et **par configuration** (chaque outil seul vs cascade) → c'est le tableau qui justifie l'architecture.
-  - **Taux d'automatisation** : % de champs `AUTO_VALIDATED` corrects (l'indicateur métier : ce que l'utilisateur eDoc n'a plus à saisir).
-  - **Coût et latence** par document (nb d'appels API par niveau).
-- **Calibration des seuils** : sur l'ensemble du dataset si < 20 docs, avec mention explicite de la limite (pas de split train/test crédible à cette taille) ; si ≥ 20 docs, réserver ~30 % en test. Cette honnêteté méthodologique figure telle quelle dans le rapport.
+- ~~Les 27 documents appartiennent-ils à un ou plusieurs projets ?~~ Confirmé : corpus d'inspiration/test hétérogène, pas un blocage.
+- ~~Config récupérée par API ou export manuel ?~~ Confirmé : l'appel API fournit le document, la liste des champs requis, et le projet.
+- ~~L'appel porte-t-il un identifiant de projet ?~~ Confirmé : oui, code ou nom exact, transmis avec chaque appel. P4 peut sélectionner la bonne table sans ambiguïté.
+- ~~Comment gérer l'écart entre le nom de champ demandé et le libellé réellement imprimé (NUMERO vs NUM, NIVEAU vs LEVEL) ?~~ Confirmé : c'est le rôle de la correspondance floue déjà prévue en P3, pas un mécanisme à ajouter — la seule vigilance est de ne jamais implémenter cette étape en comparaison stricte.
+
+Plus aucune question ne bloque le début du codage. Restent, indépendantes de ce pivot et à traiter en cours de route plutôt qu'avant É1 : Titre4, Indice par défaut, convention NUMERO (zéros de tête), champ DATE à ajouter au schéma ou non.
 
 ---
 
-## 7. Risques et parades
+## 9. Option pour tenir les délais : scope MVP
+
+L'architecture ci-dessus est conçue pour être générique, mais rien n'oblige à la tester sur dix projets pour la valider. Proposition : construire la classification comme un module paramétré par projet (aucun nom de champ codé en dur dans la logique), mais ne réellement peupler et tester que le(s) projet(s) pour lesquels on a des données maintenant — Mtbc Buche à minima. La capacité à gérer un projet totalement nouveau se justifie par la conception, pas par un test exhaustif sur chaque projet eDoc existant — c'est un argument de rapport à part entière : architecture conçue et démontrée générique, testée sur N projets réels.
+
+---
+
+## 10. Risques
 
 | Risque | Impact | Parade |
 |---|---|---|
-| Clés Azure/Mistral en retard | J5 glisse | Demande J1 matin. La cascade se dégrade proprement : chemin natif + Tesseract + statuts TO_REVIEW reste démontrable de bout en bout sans aucune clé. |
-| Documents supplémentaires arrivent tard | Calibrage moins robuste | Développement complet possible sur les 8 actuels ; relance J1 puis J5 ; limite documentée dans le rapport si dataset final < 20. |
-| Hallucination Mistral sur champs codés | Erreurs silencieuses | D11 : jamais d'auto-validation d'une valeur LLM non matchée en table. |
-| Quotas du tier gratuit Azure épuisés par les runs d'éval | Blocage J8/J10 | Cache des réponses brutes (M4) : chaque document n'est envoyé qu'une fois par outil, les re-runs lisent le cache. |
-| Rotation non détectée (OSD peu fiable sur pages pauvres en texte) | Cartouche raté | Chaîne à 3 étages de D6 ; la force brute 4 rotations sur crops de coins est le filet final. |
-| Texte natif corrompu sur certains exports CAO du corpus élargi | Extraction native fausse | Vérifié sain sur les docs actuels ; le filet par champ de M3 renvoie automatiquement vers l'OCR tout champ natif non matché. |
-| Dérive de périmètre (eDoc UI, Java/Angular, déploiement) | Deadline explosée | §8 opposable : hors scope acté avec l'encadrant. |
+| Détection de cartouche échoue (zone ratée ou mauvaise zone choisie) | Rien à classer, ou du bruit classé à tort | Test décisif dès É1 avant d'investir dans la suite ; garder la lecture "page entière" comme repli si la détection échoue trop souvent |
+| Appariement libellé/valeur ambigu (plusieurs mises en page coexistent) | Valeurs mal associées à leur libellé, silencieusement | Détecter le type de mise en page avant d'apparier ; mesurer spécifiquement ce taux d'erreur en É6 |
+| Seuil de correspondance floue (P3) mal calibré entre nom de champ demandé et libellé lu | Faux `MISSING` (champ présent mais non reconnu) ou fausse classification (libellé mal apparié) | Mesurer les deux types d'erreur séparément en É6 ; lexique multilingue (fra/eng) dès le départ |
+| Configuration projet incomplète (synonymes manquants) | Libellés valides classés à tort en "hors schéma" | Enrichissement itératif du lexique partagé, jamais un blocage |
+| Tables de référence actuelles spécifiques à Mtbc Buche, corpus de test plus large | Mesure de précision faussée si on valide un document d'un autre projet contre les mauvaises valeurs | Restreindre l'évaluation par table de référence aux documents dont le projet d'origine est connu et correspond ; ne pas valider "à l'aveugle" |
 
 ---
 
-## 8. Hors scope explicite (jusqu'au 20/07)
+## 11. Rapport
 
-Intégration UI eDoc (Angular) et couche Java · contrat API final eDoc (D12) · déploiement production et industrialisation (Docker = option J11) · fine-tuning ou entraînement de modèles · dédoublonnage automatique du corpus · gestion multi-cartouches par document (contredit par les faits confirmés) · pages autres que la page 1.
-
----
-
-## 9. Actions immédiates (aujourd'hui, avant le week-end)
-
-1. Demander les clés **Azure Document Intelligence** et **Mistral API** (motif : tests, tier gratuit accepté).
-2. Exporter depuis eDoc les tables **Emetteur** et **Lot** (mêmes bouton Exporter que la table Type).
-3. Relancer l'encadrant sur les **documents supplémentaires** avec vérité terrain.
-4. Initialiser le repo selon §4 (Claude Code).
-
----
-
-## 10. Questions ouvertes (non bloquantes, à trancher au fil de l'eau)
-
-1. Convention de normalisation NUMERO (zéros de tête : « 085 » vs « 85 » vs « 000439 » côté eDoc) — à confirmer avec l'encadrant ou par le comportement de l'import Bordereau.
-2. Modèle Mistral vision exact à utiliser — vérifier la documentation Mistral à jour au moment de l'implémentation (offre susceptible d'avoir évolué).
-3. Mappings de libellés en hypothèse (Spécialité/Discipline→LOT, Localisation→ZONE, DOC→TYPE) — valider sur les documents supplémentaires ou avec l'encadrant.
-4. Volumétrie réelle en production — impacte le dimensionnement post-PFA, pas le prototype.
+S'ajoute un chapitre : justification du choix architectural détection + classification vs schéma fixe, avec l'exemple concret ayant motivé le changement (deux projets eDoc, deux configurations de champs différentes observées). Argument utile pour la suite (PFE) : le pipeline ne sert pas qu'un seul projet, il sert l'application eDoc dans son ensemble.
