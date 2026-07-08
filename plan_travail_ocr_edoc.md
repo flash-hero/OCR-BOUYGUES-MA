@@ -159,4 +159,4 @@ L'architecture ci-dessus est conçue pour être générique, mais rien n'oblige 
 
 ## 11. Rapport
 
-S'ajoute un chapitre : justification du choix architectural détection + classification vs schéma fixe, avec l'exemple concret ayant motivé le changement (deux projets eDoc, deux configurations de champs différentes observées). Argument utile pour la suite (PFE) : le pipeline ne sert pas qu'un seul projet, il sert l'application eDoc dans son ensemble.
+S'ajoute un chapitre : justification du choix architectural détection + classification vs schéma fixe, avec l'exemple concret ayant motivé le changement (deux projets eDoc, deux configurations de champs différentes observées). Argument utile pour la suite (PFE) : le pipeline ne sert pas qu'un seul projet, il sert l'application eDoc dans son ensemblee.
