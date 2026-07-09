@@ -1,162 +1,169 @@
-# Plan de travail v4 — Détection de cartouche + classification générique
-**Une architecture indépendante du projet eDoc**
+# Moteur OCR eDoc — Plan de travail
+**Java / JDK 17 · Détection de cartouche + classification générique**
 PFA Oussama — Bouygues Construction IT Maroc · Encadrant : M. Boumenzeh
-Version 4.0
+Version 6.0
 
 ---
 
-## 0. Le principe, en clair
+## 0. Objectif et principe
 
-Jusqu'ici, le pipeline posait une question fermée à l'OCR : "quelle est la valeur de PHASE ? de EMETTEUR ? de LOT ?" — en supposant que ces champs-là, avec ces noms-là, existent partout. Les captures eDoc montrent que ce n'est pas vrai : chaque projet configure sa propre liste de champs ("Codification" + "Champs personnalisés"). Rien ne garantit qu'un projet non encore vu n'a pas une liste encore différente.
+Quand un utilisateur dépose un document technique dans eDoc, le système doit lire son cartouche (bloc d'identification) et pré-remplir automatiquement les champs du formulaire, pour n'importe quel projet eDoc — chaque projet ayant sa propre liste de champs configurés (Codification + Champs personnalisés).
 
-Le nouveau principe sépare deux questions qui étaient mélangées en une seule :
+Le principe repose sur deux étapes séparées :
 
-1. **Lire** : dans le cartouche, quels libellés et quelles valeurs sont écrits — peu importe lesquels. On copie tout, tel quel.
-2. **Classer** : une fois la copie brute obtenue, on la trie dans les bonnes cases — mais "les bonnes cases" dépendent du projet en question.
+1. **Lire** : localiser le cartouche sur le document et en extraire tous les libellés et valeurs qu'il contient, tels qu'imprimés, sans supposer à l'avance quels champs existent.
+2. **Classer** : ranger chaque paire (libellé, valeur) lue sur le bon champ cible — la liste des champs requis pour un document donné est fournie par l'appel API, avec le code du projet eDoc concerné.
 
-Analogie : au lieu de donner à quelqu'un un formulaire aux cases déjà nommées ("Nom : ___, Prénom : ___") et de lui demander de le remplir depuis un document, on lui demande d'abord de recopier fidèlement tout ce qui est écrit dans le bloc d'identification — chaque étiquette avec sa valeur, sans interpréter. Ensuite, dans un second temps séparé, on prend cette copie brute et on la range dans le bon formulaire — celui du client en question, puisque chaque client a le sien.
+Un champ classé est ensuite validé contre la table de référence de son projet (liste des valeurs officielles) avant d'être proposé à l'utilisateur. **Aucune table de référence n'est un vocabulaire fermé** : une valeur absente de la table n'est jamais rejetée automatiquement, elle déclenche une vérification humaine — n'importe quel champ peut légitimement recevoir une valeur inédite.
 
-Ce n'est pas une remise à zéro : ce qui a été construit reste utilisable, juste repositionné. Détail module par module en §2.
+Deux procédures de lecture sont testées en parallèle pour décider empiriquement du meilleur moteur :
+- **Procédure 1 (hybride)** : Tesseract pour les pages de garde, Mistral OCR pour les plans denses.
+- **Procédure 2 (mono-outil)** : Mistral OCR pour tout.
 
----
-
-## 1. Ce qui motive le changement
-
-- **Liste des projets (eDoc)** : "New Projet - Mtbc Buche" — le projet dont viennent les 8 tables de référence déjà construites — n'est qu'un projet parmi au moins 9. "Futur Palais de Justice de Paris" en est un autre, séparé.
-- **Configuration "Tables Plan" par projet** : deux captures d'écran montrent deux configurations différentes de la section Codification — Phase/Emetteur/Lot/Niveau/Type d'un côté, les mêmes + **Bâtiment** de l'autre. La liste des champs n'est pas fixe d'un projet à l'autre.
-
-Conséquence concrète déjà vérifiée : le document "6.pdf" du corpus de 27 est explicitement un document du projet **Futur Palais de Justice de Paris** (son cartouche l'indique). Le corpus de 27 documents est confirmé comme un **échantillon d'inspiration et de test hétérogène** — pas nécessairement un seul projet eDoc, potentiellement plusieurs. Ce n'est plus un point bloquant : c'est même une bonne nouvelle pour valider la généricité de l'architecture (§0) sur des documents réellement variés, plutôt qu'un biais à corriger.
+La comparaison se joue uniquement sur les pages de garde — sur les plans denses, les deux procédures utilisent Mistral de la même façon.
 
 ---
 
-## 2. Architecture — 7 modules
+## 1. Architecture — 7 modules
 
-| Module | Rôle | Change par rapport à avant ? |
+| Module | Rôle |
+|---|---|
+| **P0** — Ingestion & routage | Réception du document (PDF/DOCX/XLSX), isolation de la page 1 |
+| **P1** — Préparation | Correction d'orientation (`/Rotate`), rendu de la page en image |
+| **P2** — Détection + extraction générique | Localiser le cartouche, en extraire tous les libellés/valeurs, sans schéma nommé à l'avance |
+| **P3** — Classification | Ranger chaque paire (libellé, valeur) sur un champ requis, par correspondance floue |
+| **P4** — Validation | Correspondance floue contre la table de référence du projet, statuts `AUTO_VALIDATED` / `TO_REVIEW` / `MISSING` |
+| **P5** — API REST | Reçoit document + champs requis + code projet → résultat par champ |
+| **P6** — Harnais d'évaluation | Mesure comparative Tesseract vs Mistral, précision par champ et par famille de document |
+
+Deux usages distincts de la correspondance floue, à ne jamais confondre dans le code :
+- **P3** compare un *libellé* lu (ex. "N° Doc", "LEVEL") à une liste de synonymes de champ
+- **P4** compare une *valeur* lue (ex. "EX3", "Bouygues") à une table de référence
+
+---
+
+## 2. Stack technique (Java, JDK 17)
+
+| Brique | Outil | Rôle |
 |---|---|---|
-| P0 — Ingestion & routage | Format, page 1 | Inchangé |
-| P1 — Préparation | Orientation, rendu image | Inchangé |
-| P2 — Détection + extraction générique | Localiser le cartouche, en sortir tous les libellés/valeurs, sans schéma nommé à l'avance | Change de nature — détaillé en §3 |
-| P3 — Classification | Ranger chaque (libellé, valeur) brut dans le bon champ cible, selon **la liste de champs requis reçue dans l'appel API** | Nouveau module — détaillé en §4 |
-| P4 — Validation | Matching flou contre les tables de référence du champ classé ; règle D11 inchangée | Même logique qu'avant |
-| P5 — API REST | Reçoit **le document ET la liste des champs obligatoires à extraire** (fournie par l'appelant — confirmé par Oussama, ça diffère par projet côté eDoc mais ce n'est plus notre problème à déduire) → résultat par champ | Confirmé : pas de logique de détection de projet à construire, l'appelant nous dit quoi chercher |
-| P6 — Harnais d'évaluation | Comparatif Tesseract / Mistral, précision par champ | Inchangé dans l'esprit |
+| Framework applicatif / API REST | **Spring Boot 3.x** | Compatible JDK 17, standard en entreprise pour ce type de service |
+| Build | **Maven** | Gestion des dépendances et du build |
+| Appel Mistral OCR | **REST direct** (`RestClient` / `WebClient` de Spring) | Mistral ne publie pas de SDK Java officiel — appel HTTP/JSON écrit à la main, isolé dans une seule classe |
+| Lecture/rendu PDF | **Apache PDFBox** | Lecture `/Rotate`, rendu page 1 en image |
+| Lecture DOCX/XLSX | **Apache POI** | Documents déjà textuels — lecture directe, pas d'OCR |
+| OCR (moteur Tesseract) | **Tess4J** | Wrapper Java du moteur Tesseract natif ; binaire système + packs `fra` et `eng` requis |
+| Détection de structure (cartouche, voie Tesseract) | **OpenCV Java** (`org.openpnp:opencv`) | Détection de contours/grille pour localiser le cartouche sans compréhension sémantique |
+| Correspondance floue (P3, P4) | **`me.xdrop:fuzzywuzzy`** | Port Java de l'algorithme utilisé par RapidFuzz |
+| Schéma d'extraction, sérialisation | **Java records + Jackson** | Schéma ouvert pour Mistral, DTO d'API |
+| Configuration (YAML, CSV) | **SnakeYAML** (inclus Spring Boot) + **Apache Commons CSV** | Lecture des lexiques et tables de référence |
+| Traitement asynchrone | **`@Async` Spring** | Traitement en tâche de fond après réception d'un document |
+| Tests | **JUnit 5 + Mockito** | Tests unitaires du pipeline |
 
-Ce qui **ne change pas** : le principe "un lecteur, plusieurs vérificateurs" ; la règle D11 (jamais d'auto-validation sans match, sur aucun champ) ; les deux procédures en test (Tesseract sur page de garde vs Mistral partout, comparées empiriquement) ; les deux familles de documents et leur routage.
-
-Ce qui **est déjà résolu par ce changement**, sans travail supplémentaire : CO_NB n'est plus une question à part. C'est simplement une entrée de plus dans la configuration du projet Mtbc Buche (section Champs personnalisés) — rien de spécial à coder pour lui.
+Modèle Mistral OCR épinglé : `mistral-ocr-4-0` (jamais `mistral-ocr-latest`, pour des métriques reproductibles).
 
 ---
 
-## 3. P2 — Détection de cartouche + extraction générique
+## 3. Détail par module
 
-### Pour Mistral OCR
-Le schéma `document_annotation_format` change de forme : au lieu de propriétés nommées (`PHASE`, `EMETTEUR`...), un schéma ouvert, par exemple :
+### P0 / P1 — Ingestion et préparation
+`@RestController` Spring reçoit un `MultipartFile` et un DTO JSON (`requiredFields: List<String>`, `projectCode: String`). Détection de format par extension. PDFBox lit l'attribut `/Rotate` et rend la page 1 en `BufferedImage` (300–400 DPI) pour la voie Tesseract ; Mistral reçoit le PDF directement, sans rendu préalable.
+
+### P2 — Détection + extraction générique
+
+**Mistral OCR** : appel avec un schéma d'annotation ouvert — aucun nom de champ métier dans le schéma, seulement une structure générique :
+```java
+record CartoucheField(String label, String value) {}
+record CartoucheExtraction(boolean cartoucheFound, List<CartoucheField> fields) {}
 ```
-{
-  "cartouche_trouve": bool,
-  "champs": [ { "libelle": string, "valeur": string } ]
-}
+Le prompt d'annotation demande de localiser le bloc d'identification et de recopier chaque libellé avec sa valeur telle qu'imprimée, sans interpréter ni traduire.
+
+**Tesseract (via Tess4J)** : n'a pas de compréhension sémantique, donc détection structurelle nécessaire — recherche de grille/boîte à bordures par contours (`Imgproc.findContours`) ou détection de lignes (`Imgproc.HoughLinesP`), le cartouche se distinguant visuellement du reste de la page par sa structure en tableau. OCR de la zone détectée en `fra+eng` (le corpus contient des libellés anglais ponctuels : "LEVEL", "As indicated"). Appariement libellé/valeur par géométrie des bounding boxes — au moins deux mises en page coexistent dans le corpus (libellé à gauche de sa valeur sur une ligne ; libellé au-dessus de sa valeur sur deux lignes), l'heuristique doit gérer les deux.
+
+### P3 — Classification
+`FuzzySearch.ratio(...)` (fuzzywuzzy) compare chaque libellé brut aux synonymes connus pour chaque champ demandé dans l'appel API. Bibliothèque de synonymes **partagée entre tous les projets** (`schema_fields.yaml`, un seul fichier, multilingue) — un même nom de champ a le même sens partout, seul le sous-ensemble de champs actifs varie par appel. Jamais de comparaison stricte (`==`) entre nom de champ demandé et libellé lu : une correspondance manquée à tort transforme un champ présent en faux `MISSING`.
+
+### P4 — Validation
+Correspondance floue contre `config/projects/{projectCode}/reference_tables/*.csv`. Statuts (`enum FieldStatus { AUTO_VALIDATED, TO_REVIEW, MISSING }`). Règle absolue : un non-match ne rejette jamais silencieusement une valeur — il déclenche toujours `TO_REVIEW`, sur n'importe quel champ, sans exception.
+
+### P5 — API REST
+`POST /extractions` (document + `requiredFields` + `projectCode`) → `202 {jobId}`, traitement en tâche de fond (`@Async`). `GET /extractions/{jobId}` → résultat par champ (valeur, statut, confiance, moteur utilisé).
+
+### P6 — Harnais d'évaluation
+Classe Java exécutable (pas un test JUnit — c'est un script de mesure) : exécute P2→P3→P4 avec chaque moteur sur le corpus annoté, produit un rapport comparatif (précision par champ, par famille de document, coût, latence).
+
+---
+
+## 4. Configuration
+
+- `config/schema_fields.yaml` — bibliothèque partagée de synonymes de libellés par nom de champ, multilingue (français + anglais).
+- `config/projects/{projectCode}/reference_tables/*.csv` — valeurs acceptées par champ, propres à chaque projet eDoc (colonnes `code`, `libelle`).
+
+---
+
+## 5. Structure du projet
+
 ```
-Le `document_annotation_prompt` guide la détection : repérer le bloc d'identification (cartouche), recopier chaque libellé avec sa valeur telle qu'imprimée, sans interpréter ni renommer. C'est un changement de schéma, pas de changement d'outil. `include_blocks` (bounding boxes) reste utile pour vérifier où le modèle a situé le cartouche.
-
-### Pour Tesseract
-Plus difficile : Tesseract n'a pas de compréhension sémantique, il ne peut pas "reconnaître un cartouche" comme concept. Détection structurelle nécessaire :
-- Détection de grille/tableau via OpenCV (contours ou détection de lignes) — un cartouche est presque toujours une boîte à bordures avec des lignes internes, ce qui le distingue visuellement du reste de la page.
-- Une fois la zone candidate trouvée, OCR de cette zone avec `pytesseract` en **`lang='fra+eng'`** (pas seulement `fra`) — le corpus montre des libellés anglais ponctuels ("As indicated", "LEVEL"), puis appariement libellé/valeur par géométrie (colonne gauche = libellé / colonne droite = valeur, ou libellé au-dessus / valeur en dessous selon le gabarit).
-
-**À ne pas sous-estimer** : au moins deux mises en page de cartouche coexistent dans le corpus (libellé à gauche de la valeur sur une ligne ; libellé au-dessus de la valeur sur deux lignes — vu sur le document Palais de Justice). L'heuristique d'appariement doit gérer les deux, ou détecter laquelle s'applique avant d'apparier. C'est un vrai sujet d'itération empirique, pas un détail d'implémentation.
-
----
-
-## 4. P3 — Classification (nouveau module)
-
-**Mécanisme confirmé par Oussama** : l'appel API fournit le document **et** la liste des champs obligatoires à extraire pour cet appel — c'est l'appelant (eDoc) qui porte la différence entre projets, pas notre pipeline. On n'a donc pas besoin de deviner ou de récupérer une configuration de projet : on reçoit directement quoi chercher.
-
-Entrée : liste de paires (libellé brut, valeur brute, confiance) issues de P2, plus la liste des champs requis pour cet appel (reçue via l'API, pas déduite).
-Sortie : chaque paire rangée sur un champ requis si elle correspond, ou classée "hors schéma" sinon (jamais perdue, jamais forcée dans le mauvais champ).
-
-Mécanique : RapidFuzz compare chaque libellé brut aux synonymes connus pour chaque nom de champ **demandé dans cet appel**. Meilleur score au-dessus du seuil → classé. Rien au-dessus du seuil → hors schéma.
-
-Deux usages de RapidFuzz à ne pas confondre dans le code :
-- **P3 (classification)** compare un *libellé* (ex. "N° Doc") à une liste de synonymes de champ
-- **P4 (validation)** compare une *valeur* (ex. "EX3") à une table de référence
-
-**Conséquence de conception, plus simple que prévu initialement** : `schema_fields.yaml` peut rester **une seule bibliothèque partagée** (nom de champ → synonymes de libellés), pas un fichier par projet — puisque le même nom de champ ("Emetteur", "Bâtiment"...) a probablement le même sens et les mêmes synonymes partout, peu importe le projet qui le demande. Ce que chaque appel API change, c'est **quel sous-ensemble** de cette bibliothèque est actif pour cet appel-là, pas le contenu des synonymes eux-mêmes. À enrichir au fil de l'eau si un nouveau nom de champ apparaît (ex. "Bâtiment" à ajouter dès maintenant, vu dans les captures).
-
-**Confirmé, avec l'exemple qui le précise** : si l'API demande `NUMERO` et `NIVEAU`, et que le document imprime "NUM" et "LEVEL", ce n'est pas une comparaison exacte de chaînes qui doit décider si le champ est trouvé ou `MISSING` — c'est le même mécanisme de correspondance floue (RapidFuzz contre les synonymes de `schema_fields.yaml`) qui s'en charge. Rien de nouveau à construire : c'est exactement ce que ce module fait déjà. Ce qui change, c'est qu'il faut être vigilant à ne **jamais** implémenter cette étape en comparaison stricte (`==`) entre le nom de champ demandé et le libellé lu — ce serait le bug qui ferait passer un champ réellement présent en `MISSING` à tort. Statut `MISSING` réservé au cas où même la correspondance floue ne trouve rien d'assez proche.
-
-Détail utile de l'exemple : "LEVEL" est un libellé anglais pour ce qui correspond à NIVEAU — le corpus contient déjà des indices de ça ("As indicated" en anglais vu sur un document). Le lexique de synonymes doit couvrir le anglais autant que les variantes françaises, pas seulement "N° Doc / N° GED / N° Chrono". Ajusté en §3 (OCR Tesseract) et à garder en tête pour peupler `schema_fields.yaml`.
-
-Configuration confirmée : `config/schema_fields.yaml` (bibliothèque partagée de synonymes, un seul fichier, multilingue) + `config/projects/{project_id}/reference_tables/*.csv` (valeurs acceptées, par projet — le project_id arrive bien dans l'appel API, confirmé). Les 8 CSV déjà produits pour Mtbc Buche n'ont pas besoin d'être refaits — juste rangés sous `config/projects/mtbc_buche/`.
+edoc-ocr/
+├── pom.xml
+├── src/main/java/com/bouygues/edocor/
+│   ├── EdocOcrApplication.java
+│   ├── ingestion/       # P0, P1
+│   ├── extraction/      # P2 : MistralClient, TesseractExtractor, détection cartouche
+│   ├── classification/  # P3
+│   ├── validation/      # P4
+│   ├── api/             # P5 : controllers, DTO
+│   └── evaluation/      # P6 : harnais exécutable
+├── src/main/resources/
+│   ├── application.yml
+│   ├── schema_fields.yaml
+│   └── projects/{projectCode}/reference_tables/*.csv
+├── src/test/java/...
+└── README.md
+```
 
 ---
 
-## 5. P4 — Validation (reprend l'existant)
-
-Logique identique à ce qui était déjà spécifiée : matching flou contre la table de référence du champ classé, statuts `AUTO_VALIDATED` / `TO_REVIEW` / `MISSING`, règle D11 uniforme (aucun champ n'est un vocabulaire fermé, un non-match déclenche toujours TO_REVIEW, jamais un rejet automatique). **Confirmé** : l'appel API porte le code ou le nom exact du projet, donc P4 sait sans ambiguïté quelle table consulter.
-
----
-
-## 6. Stack — ce qui s'ajoute ou change de rôle
-
-| Brique | Rôle | Nouveau par rapport à avant ? |
-|---|---|---|
-| Mistral OCR (`document_annotation_format`) | Détection + extraction générique | Même outil, schéma redessiné (ouvert au lieu de nommé) |
-| Tesseract 5 + `pytesseract` | OCR brut sur la zone cartouche détectée | Inchangé |
-| **OpenCV — contours / détection de lignes** | **Détection structurelle du cartouche (Tesseract)** | Rôle élargi — avant, juste prétraitement d'image ; maintenant aussi détection de structure |
-| RapidFuzz | Classification (libellé→champ) **et** validation (valeur→table) | Même librairie, un usage de plus |
-| PyMuPDF | Rendu image, lecture `/Rotate` | Inchangé |
-| `config/schema_fields.yaml` + `config/projects/{id}/reference_tables/` | Synonymes de libellés (bibliothèque partagée) + valeurs acceptées (par projet) | Structure affinée — un seul fichier de synonymes, tables de valeurs toujours par projet |
-
----
-
-## 7. Étapes de travail
+## 6. Étapes de travail
 
 | Étape | Durée | Contenu | Sortie |
 |---|---|---|---|
-| É1 | 2 j | Setup (clé Mistral, Tesseract). **Test décisif prioritaire** : Mistral peut-il détecter et extraire le cartouche en libellés/valeurs génériques, sur 2-3 documents des deux familles ? Conditionne tout le reste | Réponse au test décisif ; environnement prêt |
-| É2 | 1 j | P0 (+ identification du projet) + P1 (inchangé) | Tronc d'ingestion prêt |
-| É3 | 3–4 j | P2 : schéma générique côté Mistral ; détection structurelle + OCR + appariement côté Tesseract | Paires (libellé, valeur) brutes sur les documents de test, pour les deux moteurs |
-| É4 | 2 j | P3 : classification, `schema_fields.yaml` par projet | Champs classés par projet |
-| É5 | 1 j | P4 : validation (reprend la logique déjà spécifiée) | Statuts calculés |
-| É6 | 1–2 j | P6 : harnais comparatif Tesseract/Mistral (page de garde) | Tableau comparatif chiffré |
-| É7 | 1–2 j | Itération sur les points faibles mesurés (l'appariement Tesseract en priorité probable) | Précision en hausse |
-| É8 | 1 j | P5 : API REST (+ paramètre projet) | POST/GET fonctionnels |
+| É1 | 2–3 j | Scaffold Maven/Spring Boot, config Tess4J + packs natifs (fra, eng), config OpenCV Java. Test décisif : Mistral détecte-t-il le cartouche en schéma ouvert, sur une page de garde native, un plan dense, un scan ? | Environnement prêt, réponse au test décisif |
+| É2 | 1–2 j | P0/P1 : PDFBox, routage | Tronc d'ingestion prêt |
+| É3 | 4–5 j | P2 : appel REST Mistral + schéma ouvert ; détection structurelle OpenCV + Tess4J + appariement | Paires (libellé, valeur) brutes, deux moteurs |
+| É4 | 2 j | P3 : classification | Champs classés |
+| É5 | 1–2 j | P4 : validation | Statuts calculés |
+| É6 | 1–2 j | P6 : harnais comparatif Tesseract/Mistral | Tableau comparatif chiffré, décision du moteur retenu pour les pages de garde |
+| É7 | 1–2 j | Itération sur les points faibles mesurés | Précision en hausse |
+| É8 | 1–2 j | P5 : API REST | POST/GET fonctionnels |
 | É9 | 1–2 j | Rapport + démo | Livrables prêts |
 
-**Total estimé : 13–17 jours ouvrés** — plus que le plan précédent (10–13 j), parce que la détection de cartouche et la classification sont deux problèmes réels de plus à résoudre. En échange : une architecture qui fonctionne sur n'importe quel projet eDoc, pas seulement celui qu'on a sous la main. Si le temps presse, voir §9.
+**Total estimé : 15–21 jours ouvrés.**
 
 ---
 
-## 8. Questions ouvertes — toutes résolues côté architecture
+## 7. Ce qui reste à obtenir ou décider
 
-- ~~Les 27 documents appartiennent-ils à un ou plusieurs projets ?~~ Confirmé : corpus d'inspiration/test hétérogène, pas un blocage.
-- ~~Config récupérée par API ou export manuel ?~~ Confirmé : l'appel API fournit le document, la liste des champs requis, et le projet.
-- ~~L'appel porte-t-il un identifiant de projet ?~~ Confirmé : oui, code ou nom exact, transmis avec chaque appel. P4 peut sélectionner la bonne table sans ambiguïté.
-- ~~Comment gérer l'écart entre le nom de champ demandé et le libellé réellement imprimé (NUMERO vs NUM, NIVEAU vs LEVEL) ?~~ Confirmé : c'est le rôle de la correspondance floue déjà prévue en P3, pas un mécanisme à ajouter — la seule vigilance est de ne jamais implémenter cette étape en comparaison stricte.
-
-Plus aucune question ne bloque le début du codage. Restent, indépendantes de ce pivot et à traiter en cours de route plutôt qu'avant É1 : Titre4, Indice par défaut, convention NUMERO (zéros de tête), champ DATE à ajouter au schéma ou non.
-
----
-
-## 9. Option pour tenir les délais : scope MVP
-
-L'architecture ci-dessus est conçue pour être générique, mais rien n'oblige à la tester sur dix projets pour la valider. Proposition : construire la classification comme un module paramétré par projet (aucun nom de champ codé en dur dans la logique), mais ne réellement peupler et tester que le(s) projet(s) pour lesquels on a des données maintenant — Mtbc Buche à minima. La capacité à gérer un projet totalement nouveau se justifie par la conception, pas par un test exhaustif sur chaque projet eDoc existant — c'est un argument de rapport à part entière : architecture conçue et démontrée générique, testée sur N projets réels.
+- `data/annotations.xlsx` (vérité terrain) — valeur correcte de chaque champ pour le corpus de test, à saisir manuellement. Bloquant pour É6, pas pour É1–É5.
+- Tables `FORMAT_DU_PLAN` et `ECHELLE_DU_PLAN` — proposées à partir de l'échantillon de documents disponible, à valider avec l'équipe eDoc.
+- Normalisation de la notation d'échelle avant comparaison (`1/50`, `1:50`, `1 : 50` coexistent selon le gabarit).
+- Champ `DATE`, présent dans le cartouche sur les documents inspectés mais absent du schéma actuel — à ajouter ou volontairement laisser hors schéma.
+- Convention de zéros de tête pour `NUMERO`, valeur par défaut du champ `Indice`, présence du champ `Titre4`.
 
 ---
 
-## 10. Risques
+## 8. Risques
 
 | Risque | Impact | Parade |
 |---|---|---|
-| Détection de cartouche échoue (zone ratée ou mauvaise zone choisie) | Rien à classer, ou du bruit classé à tort | Test décisif dès É1 avant d'investir dans la suite ; garder la lecture "page entière" comme repli si la détection échoue trop souvent |
-| Appariement libellé/valeur ambigu (plusieurs mises en page coexistent) | Valeurs mal associées à leur libellé, silencieusement | Détecter le type de mise en page avant d'apparier ; mesurer spécifiquement ce taux d'erreur en É6 |
-| Seuil de correspondance floue (P3) mal calibré entre nom de champ demandé et libellé lu | Faux `MISSING` (champ présent mais non reconnu) ou fausse classification (libellé mal apparié) | Mesurer les deux types d'erreur séparément en É6 ; lexique multilingue (fra/eng) dès le départ |
+| Détection de cartouche échoue (zone ratée ou mauvaise zone choisie) | Rien à classer, ou du bruit classé à tort | Test décisif dès É1 ; lecture "page entière" en repli si la détection échoue trop souvent |
+| Appariement libellé/valeur ambigu (plusieurs mises en page coexistent) | Valeurs mal associées à leur libellé, silencieusement | Détecter le type de mise en page avant d'apparier ; mesurer ce taux d'erreur spécifiquement en É6 |
+| Configuration des bibliothèques natives (Tess4J, OpenCV) capricieuse en Java | Temps perdu en É1 sur des erreurs d'environnement | Script `check_setup` en tout début d'É1, qui isole précisément ce qui échoue |
+| Pas de SDK Mistral officiel en Java | Code d'appel à écrire et maintenir à la main | Appel isolé dans une seule classe pour limiter l'impact d'un changement de format côté Mistral |
 | Configuration projet incomplète (synonymes manquants) | Libellés valides classés à tort en "hors schéma" | Enrichissement itératif du lexique partagé, jamais un blocage |
-| Tables de référence actuelles spécifiques à Mtbc Buche, corpus de test plus large | Mesure de précision faussée si on valide un document d'un autre projet contre les mauvaises valeurs | Restreindre l'évaluation par table de référence aux documents dont le projet d'origine est connu et correspond ; ne pas valider "à l'aveugle" |
+| Verbosité Java sur une phase qui reste exploratoire (réglage des heuristiques d'appariement) | Cycles d'itération plus lents qu'un prototypage rapide | Accepté comme coût de l'intégration ; pas de sur-architecture avant le résultat du test décisif É1 |
 
 ---
 
-## 11. Rapport
+## 9. Rapport
 
-S'ajoute un chapitre : justification du choix architectural détection + classification vs schéma fixe, avec l'exemple concret ayant motivé le changement (deux projets eDoc, deux configurations de champs différentes observées). Argument utile pour la suite (PFE) : le pipeline ne sert pas qu'un seul projet, il sert l'application eDoc dans son ensemblee.
+Le rapport final justifie, chiffres à l'appui : le choix Tesseract vs Mistral sur les pages de garde (précision, coût, latence) ; la robustesse du garde-fou de validation (combien d'erreurs le non-match empêche de valider à tort) ; et l'architecture générique (détection + classification) comme réponse au constat que chaque projet eDoc configure ses propres champs — démontrée sur le(s) projet(s) pour lesquels des données réelles sont disponibles, conçue pour en accueillir d'autres sans changement de code.
