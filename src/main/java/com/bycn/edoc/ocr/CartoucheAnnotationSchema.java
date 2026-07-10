@@ -20,10 +20,19 @@ public final class CartoucheAnnotationSchema {
             C'est en général un bloc encadré, situé en bas à droite ou sur un côté, qui regroupe \
             les métadonnées du document : numéro/référence, titre, auteur ou émetteur, phase, \
             échelle, indice/révision, date, format, etc. \
-            Recopie CHAQUE paire libellé/valeur exactement telle qu'imprimée : ne traduis pas, \
-            n'interprète pas, ne corrige pas, n'invente aucune paire. Si un libellé n'a pas de \
-            valeur, mets une chaîne vide. Si le document ne contient aucun cartouche, renvoie \
-            cartoucheFound=false et une liste fields vide.""";
+            Recopie CHAQUE paire libellé/valeur exactement telle qu'imprimée, CARACTÈRE PAR \
+            CARACTÈRE : ne traduis pas (garde ÉMETTEUR, NIVEAU, N°… tels quels — jamais « ISSUER », \
+            « LEVEL », « NUMBER »), n'interprète pas, ne corrige pas, n'invente aucune paire. \
+            Lis attentivement les petits libellés, même en caractères minuscules ou stylisés. \
+            IMPORTANT — tableaux à deux lignes : le cartouche contient souvent un petit tableau où \
+            une ligne d'EN-TÊTES (ex. Phase | Émetteur | Lot | Zone | Bâtiment | Type | Niveau | \
+            N° document | Indice) est placée juste AU-DESSUS d'une ligne de VALEURS (ex. EXE | CPI | \
+            003 | TZ | AB | MET | TN | 0114 | G). Associe alors chaque en-tête à la valeur située \
+            directement en dessous (ou dans la même colonne), et renvoie une paire libellé=en-tête, \
+            valeur=cellule correspondante — jamais des libellés à valeur vide d'un côté et des \
+            valeurs orphelines de l'autre. \
+            Si un libellé n'a réellement pas de valeur, mets une chaîne vide. Si le document ne \
+            contient aucun cartouche, renvoie cartoucheFound=false et une liste fields vide.""";
 
     private CartoucheAnnotationSchema() {
     }

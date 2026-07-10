@@ -26,7 +26,7 @@ public final class PdfSupport {
     private static final double POINTS_PER_INCH = 72.0;
     private static final double MM_PER_INCH = 25.4;
     private static final float MIN_RENDER_DPI = 72f;
-    private static final float MAX_RENDER_DPI = 300f;
+    private static final float MAX_RENDER_DPI = 400f;
 
     private PdfSupport() {
     }

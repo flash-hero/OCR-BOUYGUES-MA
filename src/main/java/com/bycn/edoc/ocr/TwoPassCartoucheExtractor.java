@@ -37,11 +37,15 @@ public class TwoPassCartoucheExtractor {
     /** Largeur/hauteur de bande pour les cartouches centrés ou le long d'un bord. */
     static final double BAND_FRACTION = 0.70;
 
-    /** Résolution visée du découpage envoyé en passe 2 (grand côté, en pixels). */
-    static final int TARGET_CROP_LONG_PX = 2600;
+    /**
+     * Résolution visée du découpage envoyé en passe 2 (grand côté, en pixels). Plus la valeur est
+     * haute, plus les petits libellés du cartouche restent lisibles après le redimensionnement
+     * interne de Mistral (moins de libellés brouillés type ÉMETTEUR→DIRETTEUR).
+     */
+    static final int TARGET_CROP_LONG_PX = 3400;
 
     /** Garde-fou mémoire : taille max du rendu pleine page (grand côté, en pixels). */
-    static final int MAX_FULL_RENDER_PX = 6500;
+    static final int MAX_FULL_RENDER_PX = 7800;
 
     /**
      * Ordre de repli sur les coins quand la passe 1 s'est trompée. Bas-droite d'abord (position la

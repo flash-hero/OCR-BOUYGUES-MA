@@ -43,6 +43,16 @@ class CartouchePlausibilityTest {
     }
 
     @Test
+    void a_symbol_legend_with_mostly_empty_values_is_rejected() {
+        // Cas 10.pdf : une légende de symboles a le bon nombre de lignes mais des valeurs vides.
+        CartoucheExtraction ex = new CartoucheExtraction(true, List.of(
+                f("REF", "HARILLAGE LOT LAC - plan n°107"),
+                f("SYMBOLE", ""),
+                f("DENOMINATION", "")));
+        assertThat(CartouchePlausibility.looksLikeCartouche(ex)).isFalse();
+    }
+
+    @Test
     void not_found_or_too_few_fields_is_rejected() {
         assertThat(CartouchePlausibility.looksLikeCartouche(
                 new CartoucheExtraction(false, List.of()))).isFalse();
