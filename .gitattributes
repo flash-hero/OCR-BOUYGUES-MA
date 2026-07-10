@@ -1,0 +1,12 @@
+# Normalisation des fins de ligne : LF dans le dépôt pour tout le texte.
+* text=auto eol=lf
+
+# Scripts Windows : garder CRLF en checkout.
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# Binaires : jamais de conversion.
+*.pdf binary
+*.png binary
+*.jar binary

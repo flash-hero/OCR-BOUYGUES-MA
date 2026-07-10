@@ -1,0 +1,35 @@
+# --- Secrets : ne JAMAIS commiter la clé API ---
+.env
+
+# --- Build Maven ---
+target/
+
+# --- Genere : graphe de code (regenerable via `graphify update .`) ---
+graphify-out/
+
+# --- Config assistant IA (local, hors projet) ---
+.claude/
+CLAUDE.md
+
+# --- Documents d'exemple (plans internes, potentiellement confidentiels) ---
+# On versionne l'arborescence mais pas les PDF eux-mêmes.
+data/samples/*.pdf
+!data/samples/.gitkeep
+
+# --- IDE ---
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.project
+.classpath
+.factorypath
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+
+# --- Logs ---
+*.log

@@ -1,0 +1,19 @@
+spring:
+  application:
+    name: edoc-ocr
+# Les timeouts HTTP sont portes par le request factory dans OcrConfig.
+
+mistral:
+  ocr:
+    # La cle vient de MISTRAL_API_KEY (variable d'environnement ou fichier .env, jamais commitee).
+    api-key: ${MISTRAL_API_KEY:}
+    # Endpoint : api.mistral.ai (La Plateforme) OU un Target URI Azure AI Foundry.
+    # Surchargeable via .env sans toucher au code.
+    base-url: ${MISTRAL_OCR_BASE_URL:https://api.mistral.ai}
+    ocr-path: ${MISTRAL_OCR_PATH:/v1/ocr}
+    # Sur La Plateforme : modele EPINGLE (jamais -latest). Sur Azure : le NOM DU DEPLOIEMENT.
+    model: ${MISTRAL_OCR_MODEL:mistral-ocr-4-0}
+    max-annotation-pages: 8
+
+edoc:
+  samples-dir: data/samples

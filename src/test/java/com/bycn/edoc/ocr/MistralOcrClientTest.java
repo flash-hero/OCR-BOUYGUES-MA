@@ -1,0 +1,148 @@
+package com.bycn.edoc.ocr;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.header;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
+import static org.springframework.test.web.client.response.MockRestResponseCreators.withServerError;
+import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.nio.file.Path;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.hamcrest.Matchers;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.client.MockRestServiceServer;
+import org.springframework.web.client.RestClient;
+
+class MistralOcrClientTest {
+
+    private final ObjectMapper mapper = new ObjectMapper();
+
+    private MistralOcrProperties props() {
+        return new MistralOcrProperties("test-key", "https://api.mistral.ai", "/v1/ocr", "mistral-ocr-4-0", 8);
+    }
+
+    @Test
+    void sends_pinned_model_base64_pdf_and_open_schema_then_parses_string_annotation(@TempDir Path tmp)
+            throws Exception {
+        // Arrange
+        Path pdf = writeMinimalPdf(tmp);
+        RestClient.Builder builder = RestClient.builder();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+
+        String annotation = "{\"cartoucheFound\":true,"
+                + "\"fields\":[{\"label\":\"N° de plan\",\"value\":\"PL-001\"}]}";
+        String responseJson = "{\"model\":\"mistral-ocr-4-0\",\"document_annotation\":"
+                + mapper.writeValueAsString(annotation) + "}";
+
+        server.expect(requestTo("https://api.mistral.ai/v1/ocr"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(header("Authorization", "Bearer test-key"))
+                .andExpect(jsonPath("$.model").value("mistral-ocr-4-0"))
+                .andExpect(jsonPath("$.document.type").value("document_url"))
+                .andExpect(jsonPath("$.document.document_url")
+                        .value(Matchers.startsWith("data:application/pdf;base64,")))
+                .andExpect(jsonPath("$.document_annotation_format.type").value("json_schema"))
+                .andExpect(jsonPath("$.document_annotation_format.json_schema.name").value("cartouche_extraction"))
+                .andExpect(jsonPath("$.include_image_base64").value(false))
+                .andExpect(jsonPath("$.pages[0]").value(0))
+                .andRespond(withSuccess(responseJson, MediaType.APPLICATION_JSON));
+
+        MistralOcrClient client = new MistralOcrClient(props(), builder, mapper);
+
+        // Act
+        OcrResult result = client.analyze(pdf);
+
+        // Assert
+        server.verify();
+        assertThat(result.hasAnnotation()).isTrue();
+        assertThat(result.extraction().cartoucheFound()).isTrue();
+        assertThat(result.extraction().fields()).singleElement().satisfies(f -> {
+            assertThat(f.label()).isEqualTo("N° de plan");
+            assertThat(f.value()).isEqualTo("PL-001");
+        });
+    }
+
+    @Test
+    void locate_sends_location_schema_and_parses_the_returned_zone(@TempDir Path tmp) throws Exception {
+        Path pdf = writeMinimalPdf(tmp);
+        RestClient.Builder builder = RestClient.builder();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+
+        String annotation = "{\"cartoucheFound\":true,\"corner\":\"bottom-right\"}";
+        String responseJson = "{\"document_annotation\":" + mapper.writeValueAsString(annotation) + "}";
+
+        server.expect(requestTo("https://api.mistral.ai/v1/ocr"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(jsonPath("$.document.type").value("document_url"))
+                .andExpect(jsonPath("$.document_annotation_format.json_schema.name").value("cartouche_location"))
+                .andRespond(withSuccess(responseJson, MediaType.APPLICATION_JSON));
+
+        MistralOcrClient client = new MistralOcrClient(props(), builder, mapper);
+
+        CartoucheLocation location = client.locate(pdf);
+
+        server.verify();
+        assertThat(location.cartoucheFound()).isTrue();
+        assertThat(location.corner()).isEqualTo("bottom-right");
+        assertThat(location.isUnknown()).isFalse();
+    }
+
+    @Test
+    void analyze_image_sends_an_image_url_with_the_open_extraction_schema() throws Exception {
+        RestClient.Builder builder = RestClient.builder();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+
+        String annotation = "{\"cartoucheFound\":true,"
+                + "\"fields\":[{\"label\":\"INDICE\",\"value\":\"C\"}]}";
+        String responseJson = "{\"document_annotation\":" + mapper.writeValueAsString(annotation) + "}";
+
+        server.expect(requestTo("https://api.mistral.ai/v1/ocr"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(jsonPath("$.document.type").value("image_url"))
+                .andExpect(jsonPath("$.document.image_url").value(Matchers.startsWith("data:image/png;base64,")))
+                .andExpect(jsonPath("$.document_annotation_format.json_schema.name").value("cartouche_extraction"))
+                .andRespond(withSuccess(responseJson, MediaType.APPLICATION_JSON));
+
+        MistralOcrClient client = new MistralOcrClient(props(), builder, mapper);
+
+        OcrResult result = client.analyzeImage(new byte[] {1, 2, 3, 4});
+
+        server.verify();
+        assertThat(result.hasAnnotation()).isTrue();
+        assertThat(result.extraction().fields()).singleElement().satisfies(f -> {
+            assertThat(f.label()).isEqualTo("INDICE");
+            assertThat(f.value()).isEqualTo("C");
+        });
+    }
+
+    @Test
+    void wraps_http_error_into_readable_exception(@TempDir Path tmp) throws Exception {
+        Path pdf = writeMinimalPdf(tmp);
+        RestClient.Builder builder = RestClient.builder();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        server.expect(requestTo("https://api.mistral.ai/v1/ocr"))
+                .andRespond(withServerError().body("boom"));
+
+        MistralOcrClient client = new MistralOcrClient(props(), builder, mapper);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> client.analyze(pdf))
+                .isInstanceOf(MistralOcrException.class)
+                .hasMessageContaining("500");
+    }
+
+    private Path writeMinimalPdf(Path dir) throws Exception {
+        Path pdf = dir.resolve("mini.pdf");
+        try (PDDocument doc = new PDDocument()) {
+            doc.addPage(new PDPage());
+            doc.save(pdf.toFile());
+        }
+        return pdf;
+    }
+}
