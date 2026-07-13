@@ -5,6 +5,7 @@ import com.bycn.edoc.ocr.CartoucheExtraction;
 import com.bycn.edoc.ocr.CartoucheField;
 import com.bycn.edoc.ocr.MistralOcrException;
 import com.bycn.edoc.ocr.MistralOcrProperties;
+import com.bycn.edoc.ocr.OcrResponseCache;
 import com.bycn.edoc.ocr.TwoPassCartoucheExtractor;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
@@ -35,15 +36,18 @@ public class SmokeTestRunner implements CommandLineRunner {
 
     private final TwoPassCartoucheExtractor extractor;
     private final MistralOcrProperties props;
+    private final OcrResponseCache cache;
     private final ObjectMapper prettyMapper;
     private final Path samplesDir;
 
     public SmokeTestRunner(TwoPassCartoucheExtractor extractor,
                            MistralOcrProperties props,
+                           OcrResponseCache cache,
                            ObjectMapper mapper,
                            @Value("${edoc.samples-dir:data/samples}") String samplesDir) {
         this.extractor = extractor;
         this.props = props;
+        this.cache = cache;
         this.prettyMapper = mapper.copy().enable(SerializationFeature.INDENT_OUTPUT);
         this.samplesDir = Path.of(samplesDir);
     }
@@ -54,6 +58,10 @@ public class SmokeTestRunner implements CommandLineRunner {
         System.out.println("=== Test décisif Mistral OCR — extraction générique de cartouche ===");
         System.out.println("Modèle épinglé    : " + props.model());
         System.out.println("Dossier d'exemples: " + samplesDir.toAbsolutePath());
+        System.out.println("Cache réponses    : " + (cache.isEnabled()
+                ? "actif (" + cache.directory().toAbsolutePath() + ") — un document déjà traité "
+                        + "ne recoûte rien"
+                : "désactivé"));
         System.out.println();
 
         if (!props.hasApiKey()) {
@@ -98,6 +106,10 @@ public class SmokeTestRunner implements CommandLineRunner {
         System.out.println();
         System.out.println("=== Bilan : " + ok + " traite(s), " + failed + " en erreur, "
                 + tiling + " a decouper en tuiles, " + lowConfidence + " a verifier ===");
+        if (cache.isEnabled()) {
+            System.out.println("Cache : " + cache.hits() + " reponse(s) servie(s) depuis le cache "
+                    + "(aucun cout API), " + cache.misses() + " appel(s) reseau.");
+        }
         if (tiling > 0) {
             System.out.println("Note : " + tiling + " plan(s) dense(s) non localisable(s) en passe 1 "
                     + "(le redimensionnement est trop agressif meme pour une estimation grossiere). "

@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Optional;
 import org.springframework.http.MediaType;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
@@ -35,10 +36,17 @@ public class MistralOcrClient {
     private final RestClient restClient;
     private final MistralOcrProperties props;
     private final ObjectMapper mapper;
+    private final OcrResponseCache cache;
 
     public MistralOcrClient(MistralOcrProperties props, RestClient.Builder builder, ObjectMapper mapper) {
+        this(props, builder, mapper, OcrResponseCache.disabled());
+    }
+
+    public MistralOcrClient(MistralOcrProperties props, RestClient.Builder builder, ObjectMapper mapper,
+                            OcrResponseCache cache) {
         this.props = props;
         this.mapper = mapper;
+        this.cache = cache;
         this.restClient = builder
                 .baseUrl(props.baseUrl())
                 .defaultHeaders(headers -> {
@@ -117,6 +125,12 @@ public class MistralOcrClient {
             throw new MistralOcrException("Sérialisation de la requête impossible : " + e.getMessage(), e);
         }
 
+        // Cache adressé par contenu : une requête déjà vue est resservie sans coût API.
+        Optional<JsonNode> cached = cache.get(jsonBody);
+        if (cached.isPresent()) {
+            return cached.get();
+        }
+
         JsonNode response;
         try {
             // Corps envoyé en byte[] : Content-Length connu et posé (la passerelle Azure APIM
@@ -138,6 +152,7 @@ public class MistralOcrClient {
         if (response == null) {
             throw new MistralOcrException("Réponse vide de Mistral OCR.");
         }
+        cache.put(jsonBody, response);
         return response;
     }
 

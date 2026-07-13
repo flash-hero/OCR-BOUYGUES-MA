@@ -1,6 +1,7 @@
 package com.bycn.edoc.ocr;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.nio.file.Path;
 import java.time.Duration;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -25,14 +26,24 @@ public class OcrConfig {
     private static final Duration READ_TIMEOUT = Duration.ofMinutes(3);
 
     @Bean
+    public OcrResponseCache ocrResponseCache(MistralOcrProperties props, ObjectMapper mapper) {
+        // Cache adressé par contenu : re-lancer le test sur un document déjà traité ne coûte rien.
+        if (!props.cacheEnabled() || props.cacheDir() == null || props.cacheDir().isBlank()) {
+            return OcrResponseCache.disabled();
+        }
+        return new OcrResponseCache(Path.of(props.cacheDir()), mapper);
+    }
+
+    @Bean
     public MistralOcrClient mistralOcrClient(MistralOcrProperties props,
                                              RestClient.Builder builder,
-                                             ObjectMapper mapper) {
+                                             ObjectMapper mapper,
+                                             OcrResponseCache cache) {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(CONNECT_TIMEOUT);
         factory.setReadTimeout(READ_TIMEOUT);
         // bufferRequestBody = true par defaut => Content-Length pose, pas de chunked.
-        return new MistralOcrClient(props, builder.requestFactory(factory), mapper);
+        return new MistralOcrClient(props, builder.requestFactory(factory), mapper, cache);
     }
 
     @Bean

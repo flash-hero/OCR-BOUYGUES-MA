@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
+import org.springframework.test.web.client.ExpectedCount;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestClient;
 
@@ -25,7 +26,8 @@ class MistralOcrClientTest {
     private final ObjectMapper mapper = new ObjectMapper();
 
     private MistralOcrProperties props() {
-        return new MistralOcrProperties("test-key", "https://api.mistral.ai", "/v1/ocr", "mistral-ocr-4-0", 8);
+        return new MistralOcrProperties(
+                "test-key", "https://api.mistral.ai", "/v1/ocr", "mistral-ocr-4-0", 8, true, ".ocr-cache");
     }
 
     @Test
@@ -120,6 +122,37 @@ class MistralOcrClientTest {
             assertThat(f.label()).isEqualTo("INDICE");
             assertThat(f.value()).isEqualTo("C");
         });
+    }
+
+    @Test
+    void second_identical_call_is_served_from_cache_without_hitting_the_server(@TempDir Path tmp)
+            throws Exception {
+        // Arrange : le serveur n'attend QU'UN seul appel ; le second doit venir du cache.
+        Path pdf = writeMinimalPdf(tmp);
+        RestClient.Builder builder = RestClient.builder();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+
+        String annotation = "{\"cartoucheFound\":true,\"fields\":[{\"label\":\"A\",\"value\":\"1\"}]}";
+        String responseJson = "{\"document_annotation\":" + mapper.writeValueAsString(annotation) + "}";
+        server.expect(ExpectedCount.once(), requestTo("https://api.mistral.ai/v1/ocr"))
+                .andExpect(method(HttpMethod.POST))
+                .andRespond(withSuccess(responseJson, MediaType.APPLICATION_JSON));
+
+        OcrResponseCache cache = new OcrResponseCache(tmp.resolve("cache"), mapper);
+        MistralOcrClient client = new MistralOcrClient(props(), builder, mapper, cache);
+
+        // Act
+        OcrResult first = client.analyze(pdf);
+        OcrResult second = client.analyze(pdf);
+
+        // Assert : un seul appel réseau, réponses identiques, un hit compté.
+        server.verify();
+        assertThat(first.extraction().fields()).singleElement()
+                .satisfies(f -> assertThat(f.value()).isEqualTo("1"));
+        assertThat(second.extraction().fields()).singleElement()
+                .satisfies(f -> assertThat(f.value()).isEqualTo("1"));
+        assertThat(cache.hits()).isEqualTo(1);
+        assertThat(cache.misses()).isEqualTo(1);
     }
 
     @Test

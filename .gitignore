@@ -7,6 +7,9 @@ target/
 # --- Genere : graphe de code (regenerable via `graphify update .`) ---
 graphify-out/
 
+# --- Cache de reponses OCR (adresse par contenu, regenerable en re-appelant l'API) ---
+.ocr-cache/
+
 # --- Config assistant IA (local, hors projet) ---
 .claude/
 CLAUDE.md

@@ -15,6 +15,9 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param ocrPath            chemin de l'endpoint OCR ({@code /v1/ocr} par défaut ; ajustable pour Azure)
  * @param model              identifiant de modèle épinglé (La Plateforme) ou nom de déploiement (Azure)
  * @param maxAnnotationPages nombre maximal de pages envoyées à l'annotation documentaire
+ * @param cacheEnabled       active le cache de réponses adressé par contenu (évite de re-facturer un
+ *                           appel déjà effectué à l'identique ; {@code true} par défaut)
+ * @param cacheDir           répertoire du cache de réponses (relatif au répertoire de travail)
  */
 @ConfigurationProperties(prefix = "mistral.ocr")
 public record MistralOcrProperties(
@@ -22,7 +25,9 @@ public record MistralOcrProperties(
         @DefaultValue("https://api.mistral.ai") String baseUrl,
         @DefaultValue("/v1/ocr") String ocrPath,
         @DefaultValue("mistral-ocr-4-0") String model,
-        @DefaultValue("8") int maxAnnotationPages
+        @DefaultValue("8") int maxAnnotationPages,
+        @DefaultValue("true") boolean cacheEnabled,
+        @DefaultValue(".ocr-cache") String cacheDir
 ) {
 
     public boolean hasApiKey() {
