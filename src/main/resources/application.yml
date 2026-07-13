@@ -14,6 +14,11 @@ mistral:
     # Sur La Plateforme : modele EPINGLE (jamais -latest). Sur Azure : le NOM DU DEPLOIEMENT.
     model: ${MISTRAL_OCR_MODEL:mistral-ocr-4-0}
     max-annotation-pages: 8
+    # Cache de reponses adresse par contenu : re-lancer le test sur un document deja traite
+    # (meme coin, meme resolution) ne rappelle pas l'API. S'invalide seul si le prompt/la
+    # resolution changent (le corps de requete, donc la cle, change).
+    cache-enabled: ${MISTRAL_OCR_CACHE_ENABLED:true}
+    cache-dir: ${MISTRAL_OCR_CACHE_DIR:.ocr-cache}
 
 edoc:
   samples-dir: data/samples
