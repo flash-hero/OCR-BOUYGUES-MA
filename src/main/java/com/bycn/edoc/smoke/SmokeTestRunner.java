@@ -89,7 +89,10 @@ public class SmokeTestRunner implements CommandLineRunner {
             System.out.println(SEP);
             System.out.println("Document : " + pdf.getFileName() + "  (" + sizeKb(pdf) + " Ko)");
             try {
-                CartoucheAnalysis analysis = extractor.extract(pdf);
+                // Couche fine de lecture : on lit le fichier d'exemple en octets, puis le cœur
+                // (identique à ce que fera l'API REST sur un upload) travaille uniquement sur les octets.
+                byte[] pdfBytes = Files.readAllBytes(pdf);
+                CartoucheAnalysis analysis = extractor.extract(pdfBytes);
                 printAnalysis(analysis);
                 if (analysis.mode() == CartoucheAnalysis.Mode.NEEDS_TILING) {
                     tiling++;
@@ -99,6 +102,9 @@ public class SmokeTestRunner implements CommandLineRunner {
                 ok++;
             } catch (MistralOcrException e) {
                 System.out.println("[ERREUR] " + e.getMessage());
+                failed++;
+            } catch (IOException e) {
+                System.out.println("[ERREUR] Lecture du fichier impossible : " + e.getMessage());
                 failed++;
             }
         }

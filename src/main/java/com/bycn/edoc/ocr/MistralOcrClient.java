@@ -2,10 +2,8 @@ package com.bycn.edoc.ocr;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.IOException;
-import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.http.MediaType;
@@ -16,14 +14,18 @@ import org.springframework.web.client.RestClientResponseException;
 /**
  * Client REST direct vers l'endpoint Mistral OCR ({@code POST /v1/ocr}).
  *
- * <p>Trois usages :</p>
+ * <p>On envoie toujours une <b>image d'une seule page</b> ({@code image_url}, PNG rendu à partir de
+ * la première page du document) — jamais le PDF entier. Deux conséquences : (1) la limite de 30 pages
+ * de l'API n'est jamais atteinte, quel que soit le nombre de pages du document source ; (2) le client
+ * ne lit aucun fichier, il ne connaît que des octets d'image, ce qui garde la logique métier
+ * indépendante de la provenance des documents (fichier d'exemple ou upload REST).</p>
+ *
+ * <p>Deux usages :</p>
  * <ul>
- *   <li>{@link #analyze(Path)} — lecture pleine page d'un PDF avec le schéma d'annotation
- *       <em>ouvert</em> (voir {@link CartoucheAnnotationSchema}) ;</li>
- *   <li>{@link #locate(Path)} — passe 1 : localisation grossière du cartouche (voir
+ *   <li>{@link #locateImage(byte[])} — passe 1 : localisation grossière du cartouche (voir
  *       {@link CartoucheLocationSchema}) ;</li>
- *   <li>{@link #analyzeImage(byte[])} — passe 2 : extraction ouverte sur une <em>image</em>
- *       (le découpage plein résolution d'un coin de grand plan).</li>
+ *   <li>{@link #analyzeImage(byte[])} — extraction <em>ouverte</em> (voir {@link CartoucheAnnotationSchema}) :
+ *       lecture pleine page (format standard) ou découpage plein résolution d'un coin (passe 2).</li>
  * </ul>
  *
  * <p>Le champ {@code document_annotation} renvoyé par l'API est une <em>chaîne</em> JSON, re-parsée
@@ -63,58 +65,29 @@ public class MistralOcrClient {
                 .build();
     }
 
-    /** Envoie un PDF à Mistral OCR (lecture pleine page) et renvoie la réponse brute + l'annotation. */
-    public OcrResult analyze(Path pdf) {
-        PdfBytes pdf$ = readPdf(pdf);
-        return toResult(post(buildRequest(pdf$.bytes(), pdf$.pageCount())));
-    }
-
-    /** Passe 1 : demande uniquement la zone approximative du cartouche sur la page. */
-    public CartoucheLocation locate(Path pdf) {
-        PdfBytes pdf$ = readPdf(pdf);
-        ObjectNode body = baseBody(CartoucheLocationSchema.format(mapper), CartoucheLocationSchema.PROMPT);
-        ObjectNode document = body.putObject("document");
-        document.put("type", "document_url");
-        document.put("document_url", PdfSupport.toBase64DataUri(pdf$.bytes()));
-        addPages(body, pdf$.pageCount());
+    /** Passe 1 : demande uniquement la zone approximative du cartouche sur l'image de la page. */
+    public CartoucheLocation locateImage(byte[] pngBytes) {
+        ObjectNode body = imageBody(pngBytes, CartoucheLocationSchema.format(mapper), CartoucheLocationSchema.PROMPT);
         return toLocation(post(body));
     }
 
-    /** Passe 2 : extraction ouverte sur une image (le découpage plein résolution du cartouche). */
+    /** Extraction ouverte sur une image (page entière en format standard, ou découpage d'un coin). */
     public OcrResult analyzeImage(byte[] pngBytes) {
-        ObjectNode body = baseBody(CartoucheAnnotationSchema.format(mapper), CartoucheAnnotationSchema.PROMPT);
-        ObjectNode document = body.putObject("document");
-        document.put("type", "image_url");
-        document.put("image_url", PdfSupport.toImageDataUri(pngBytes));
+        ObjectNode body = imageBody(pngBytes, CartoucheAnnotationSchema.format(mapper), CartoucheAnnotationSchema.PROMPT);
         return toResult(post(body));
     }
 
-    /** Construit le corps JSON de la requête pleine page (visible pour test). */
-    ObjectNode buildRequest(byte[] pdfBytes, int pageCount) {
-        ObjectNode body = baseBody(CartoucheAnnotationSchema.format(mapper), CartoucheAnnotationSchema.PROMPT);
-        ObjectNode document = body.putObject("document");
-        document.put("type", "document_url");
-        document.put("document_url", PdfSupport.toBase64DataUri(pdfBytes));
-        addPages(body, pageCount);
-        return body;
-    }
-
-    private ObjectNode baseBody(ObjectNode annotationFormat, String prompt) {
+    /** Corps JSON d'une requête image : modèle épinglé, schéma d'annotation, PNG en data-URI. */
+    private ObjectNode imageBody(byte[] pngBytes, ObjectNode annotationFormat, String prompt) {
         ObjectNode body = mapper.createObjectNode();
         body.put("model", props.model());
         body.set("document_annotation_format", annotationFormat);
         body.put("document_annotation_prompt", prompt);
         body.put("include_image_base64", false);
+        ObjectNode document = body.putObject("document");
+        document.put("type", "image_url");
+        document.put("image_url", PdfSupport.toImageDataUri(pngBytes));
         return body;
-    }
-
-    private void addPages(ObjectNode body, int pageCount) {
-        // L'annotation documentaire ne traite que les premières pages : on borne explicitement.
-        int limit = Math.max(1, Math.min(pageCount, props.maxAnnotationPages()));
-        ArrayNode pages = body.putArray("pages");
-        for (int i = 0; i < limit; i++) {
-            pages.add(i);
-        }
     }
 
     private JsonNode post(ObjectNode body) {
@@ -184,17 +157,6 @@ public class MistralOcrClient {
         } catch (IOException e) {
             throw new MistralOcrException("Annotation de localisation illisible dans la réponse : " + e.getMessage(), e);
         }
-    }
-
-    private PdfBytes readPdf(Path pdf) {
-        try {
-            return new PdfBytes(PdfSupport.read(pdf), PdfSupport.pageCount(pdf));
-        } catch (IOException e) {
-            throw new MistralOcrException("Lecture du PDF impossible : " + pdf + " (" + e.getMessage() + ")", e);
-        }
-    }
-
-    private record PdfBytes(byte[] bytes, int pageCount) {
     }
 
     private static String truncate(String s) {

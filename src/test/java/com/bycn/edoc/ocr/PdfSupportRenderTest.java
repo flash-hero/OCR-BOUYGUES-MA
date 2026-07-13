@@ -16,16 +16,16 @@ class PdfSupportRenderTest {
 
     @Test
     void reports_long_side_in_mm_for_an_a4_page(@TempDir Path tmp) throws Exception {
-        Path pdf = writePage(tmp, PDRectangle.A4); // 210 x 297 mm
+        byte[] pdf = PdfSupport.read(writePage(tmp, PDRectangle.A4)); // 210 x 297 mm
         double longMm = PdfSupport.pageLongSideMm(pdf, 0);
         assertThat(longMm).isCloseTo(297.0, org.assertj.core.api.Assertions.within(1.0));
     }
 
     @Test
     void renders_a_corner_region_as_a_smaller_png(@TempDir Path tmp) throws Exception {
-        Path pdf = writePage(tmp, PDRectangle.A4);
+        byte[] pdf = PdfSupport.read(writePage(tmp, PDRectangle.A4));
 
-        byte[] fullPng = PdfSupport.renderRegionPng(pdf, 0, new CropRegion(0, 0, 1, 1), 800, 4000);
+        byte[] fullPng = PdfSupport.renderFirstPagePng(pdf, 800, 4000);
         byte[] cropPng = PdfSupport.renderRegionPng(pdf, 0,
                 CropRegion.forCorner("bottom-right", 0.40, 0.70), 800, 4000);
 

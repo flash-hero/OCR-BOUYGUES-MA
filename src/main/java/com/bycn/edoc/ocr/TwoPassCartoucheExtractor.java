@@ -2,7 +2,6 @@ package com.bycn.edoc.ocr;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import java.io.IOException;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -14,8 +13,14 @@ import java.util.List;
  * A4, ou même un scan pur, la lecture pleine page fonctionne très bien.</p>
  *
  * <p>Stratégie :</p>
+ * <p>Le cœur prend un {@code byte[]} (le contenu du PDF), jamais un chemin de fichier : le smoke test
+ * lit un fichier d'exemple et passe ses octets, l'API REST passera les octets d'un upload — la
+ * logique ci-dessous est identique dans les deux cas. On envoie toujours à Mistral une <b>image
+ * d'une seule page</b> (PNG rendu à partir de la première page), jamais le PDF entier : la limite de
+ * 30 pages de l'API n'est donc jamais atteinte, quel que soit le nombre de pages du document.</p>
+ *
  * <ul>
- *   <li><b>Format standard</b> (≤ {@link #LARGE_PAGE_THRESHOLD_MM}) : lecture pleine page directe.</li>
+ *   <li><b>Format standard</b> (≤ {@link #LARGE_PAGE_THRESHOLD_MM}) : rendu de la page entière, lecture directe.</li>
  *   <li><b>Grand plan</b> : passe 1 = localisation grossière (zone), passe 2 = rendu plein
  *       résolution d'un découpage <em>généreux</em> autour de la zone, extraction, puis
  *       <b>contrôle qualité</b> ({@link CartouchePlausibility}). Si le contrôle échoue — la passe 1
@@ -71,29 +76,30 @@ public class TwoPassCartoucheExtractor {
         this.forcedCorner = (forcedCorner == null || forcedCorner.isBlank()) ? null : forcedCorner.trim();
     }
 
-    public CartoucheAnalysis extract(Path pdf) {
+    public CartoucheAnalysis extract(byte[] pdfBytes) {
         double longMm;
         try {
-            longMm = PdfSupport.pageLongSideMm(pdf, 0);
+            longMm = PdfSupport.pageLongSideMm(pdfBytes, 0);
         } catch (IOException e) {
             throw new MistralOcrException("Lecture des dimensions du PDF impossible : " + e.getMessage(), e);
         }
 
         if (longMm <= LARGE_PAGE_THRESHOLD_MM) {
-            OcrResult result = client.analyze(pdf);
+            // Format standard : on rend la page entière en image et on lit directement.
+            OcrResult result = client.analyzeImage(renderFullPage(pdfBytes));
             return CartoucheAnalysis.singlePage(extractionOf(result), result.rawAnnotation());
         }
 
         // Mode diagnostic : une seule tentative sur la zone forcée, sans passe 1 ni repli.
         if (forcedCorner != null) {
-            OcrResult result = passTwo(pdf, forcedCorner);
+            OcrResult result = passTwo(pdfBytes, forcedCorner);
             CartoucheExtraction ex = extractionOf(result);
             return CartoucheAnalysis.twoPassCrop(forcedCorner, ex, result.rawAnnotation(), null,
                     CartouchePlausibility.looksLikeCartouche(ex), 1);
         }
 
-        // Passe 1 : localisation grossière (prompt qui vise la boîte-formulaire, pas le titre).
-        CartoucheLocation location = client.locate(pdf);
+        // Passe 1 : localisation grossière sur l'image pleine page (vise la boîte-formulaire, pas le titre).
+        CartoucheLocation location = client.locateImage(renderFullPage(pdfBytes));
         if (location.isUnknown() || !location.cartoucheFound()) {
             return CartoucheAnalysis.needsTiling(location.corner(), location.raw());
         }
@@ -107,7 +113,7 @@ public class TwoPassCartoucheExtractor {
 
         for (String corner : candidates) {
             attempts++;
-            OcrResult result = passTwo(pdf, corner);
+            OcrResult result = passTwo(pdfBytes, corner);
             CartoucheExtraction ex = extractionOf(result);
             if (CartouchePlausibility.looksLikeCartouche(ex)) {
                 return CartoucheAnalysis.twoPassCrop(corner, ex, result.rawAnnotation(),
@@ -137,15 +143,24 @@ public class TwoPassCartoucheExtractor {
         return ordered;
     }
 
-    private OcrResult passTwo(Path pdf, String corner) {
+    private OcrResult passTwo(byte[] pdfBytes, String corner) {
         CropRegion region = CropRegion.forCorner(corner, CORNER_FRACTION, BAND_FRACTION);
         byte[] png;
         try {
-            png = PdfSupport.renderRegionPng(pdf, 0, region, TARGET_CROP_LONG_PX, MAX_FULL_RENDER_PX);
+            png = PdfSupport.renderRegionPng(pdfBytes, 0, region, TARGET_CROP_LONG_PX, MAX_FULL_RENDER_PX);
         } catch (IOException e) {
             throw new MistralOcrException("Rendu du découpage cartouche impossible : " + e.getMessage(), e);
         }
         return client.analyzeImage(png);
+    }
+
+    /** Rend la première page entière en PNG (même mécanisme et mêmes bornes que la passe 2). */
+    private byte[] renderFullPage(byte[] pdfBytes) {
+        try {
+            return PdfSupport.renderFirstPagePng(pdfBytes, TARGET_CROP_LONG_PX, MAX_FULL_RENDER_PX);
+        } catch (IOException e) {
+            throw new MistralOcrException("Rendu de la page en image impossible : " + e.getMessage(), e);
+        }
     }
 
     private static CartoucheExtraction extractionOf(OcrResult result) {

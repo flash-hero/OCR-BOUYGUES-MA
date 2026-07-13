@@ -15,29 +15,33 @@ import org.apache.pdfbox.rendering.ImageType;
 import org.apache.pdfbox.rendering.PDFRenderer;
 
 /**
- * Petites aides PDF : lecture des octets, encodage base64 en data-URI (format attendu par
- * l'endpoint {@code /v1/ocr}), comptage/dimensions de pages et rendu d'une <b>région</b> de page
- * en PNG haute résolution (pour la passe 2 sur les grands plans).
+ * Aides PDF <b>orientées octets</b> : tout le cœur métier travaille sur un {@code byte[]} (le
+ * contenu du PDF), jamais sur un chemin de fichier. La seule passerelle disque est {@link #read}
+ * (lecture d'un fichier d'exemple) : en production, les octets viendront d'un upload REST, mais la
+ * logique d'extraction reste identique — elle ne sait pas d'où viennent les octets.
+ *
+ * <p>Le rendu d'une <b>région</b> de la première page en PNG haute résolution ({@link #renderRegionPng})
+ * sert à la fois à la localisation grossière (région = page entière) et à la passe 2 (crop d'un coin).
+ * Comme on envoie toujours une <em>image d'une seule page</em> à Mistral, la limite de 30 pages de
+ * l'API n'est jamais atteinte, quel que soit le nombre de pages du document source.</p>
  */
 public final class PdfSupport {
 
-    private static final String PDF_DATA_URI_PREFIX = "data:application/pdf;base64,";
     private static final String PNG_DATA_URI_PREFIX = "data:image/png;base64,";
     private static final double POINTS_PER_INCH = 72.0;
     private static final double MM_PER_INCH = 25.4;
     private static final float MIN_RENDER_DPI = 72f;
     private static final float MAX_RENDER_DPI = 400f;
 
+    /** Région couvrant la page entière (localisation grossière / lecture pleine page). */
+    static final CropRegion FULL_PAGE = new CropRegion(0, 0, 1, 1);
+
     private PdfSupport() {
     }
 
+    /** Unique passerelle disque : lit un fichier d'exemple en octets (le cœur ne prend que des octets). */
     public static byte[] read(Path pdf) throws IOException {
         return Files.readAllBytes(pdf);
-    }
-
-    /** Encode le PDF en data-URI base64, tel que l'attend {@code document.document_url}. */
-    public static String toBase64DataUri(byte[] pdfBytes) {
-        return PDF_DATA_URI_PREFIX + Base64.getEncoder().encodeToString(pdfBytes);
     }
 
     /** Encode un PNG en data-URI base64, tel que l'attend {@code document.image_url}. */
@@ -45,20 +49,19 @@ public final class PdfSupport {
         return PNG_DATA_URI_PREFIX + Base64.getEncoder().encodeToString(pngBytes);
     }
 
-    /** Nombre de pages du PDF (utile pour borner l'annotation et pour l'affichage). */
-    public static int pageCount(Path pdf) throws IOException {
-        try (PDDocument doc = Loader.loadPDF(pdf.toFile())) {
-            return doc.getNumberOfPages();
-        }
-    }
-
     /** Plus grand côté de la page (en mm) — sert à décider si le document est un grand format. */
-    public static double pageLongSideMm(Path pdf, int pageIndex) throws IOException {
-        try (PDDocument doc = Loader.loadPDF(pdf.toFile())) {
+    public static double pageLongSideMm(byte[] pdfBytes, int pageIndex) throws IOException {
+        try (PDDocument doc = Loader.loadPDF(pdfBytes)) {
             PDRectangle box = doc.getPage(pageIndex).getCropBox();
             double longPt = Math.max(box.getWidth(), box.getHeight());
             return longPt / POINTS_PER_INCH * MM_PER_INCH;
         }
+    }
+
+    /** Rend la première page entière en PNG (localisation grossière ou lecture pleine page). */
+    public static byte[] renderFirstPagePng(byte[] pdfBytes, int targetLongPx, int maxFullLongPx)
+            throws IOException {
+        return renderRegionPng(pdfBytes, 0, FULL_PAGE, targetLongPx, maxFullLongPx);
     }
 
     /**
@@ -71,9 +74,9 @@ public final class PdfSupport {
      * (rotation {@code /Rotate}) : la région est ensuite découpée en coordonnées pixel, origine en
      * haut-gauche, ce qui correspond aux fractions de {@link CropRegion}.</p>
      */
-    public static byte[] renderRegionPng(Path pdf, int pageIndex, CropRegion region,
+    public static byte[] renderRegionPng(byte[] pdfBytes, int pageIndex, CropRegion region,
                                          int targetCropLongPx, int maxFullLongPx) throws IOException {
-        try (PDDocument doc = Loader.loadPDF(pdf.toFile())) {
+        try (PDDocument doc = Loader.loadPDF(pdfBytes)) {
             PDPage page = doc.getPage(pageIndex);
             PDRectangle box = page.getCropBox();
             double pageLongPt = Math.max(box.getWidth(), box.getHeight());
