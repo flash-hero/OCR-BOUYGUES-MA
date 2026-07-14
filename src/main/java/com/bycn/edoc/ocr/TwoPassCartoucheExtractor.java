@@ -27,7 +27,10 @@ import java.util.List;
  *       s'est trompée, typiquement en visant le titre — on <b>replie</b> sur les autres coins, un à
  *       un, dans l'ordre, en s'arrêtant au premier qui passe le contrôle. On ne fige jamais un coin
  *       par défaut : le repli n'accepte un coin que s'il produit un vrai cartouche.</li>
- *   <li>Si la passe 1 ne sait pas situer le cartouche ({@code unknown}), on le signale
+ *   <li>Si la passe 1 ne sait pas situer le cartouche ({@code unknown}), on ne renonce pas : on
+ *       <b>balaie les coins prioritaires</b> avec le même mécanisme (passe 2 + contrôle qualité) —
+ *       l'extraction d'un coin recadré réussit souvent là où la localisation pleine page a échoué
+ *       (ex. 21.pdf). Ce n'est qu'après échec de <em>tous</em> les coins qu'on signale
  *       ({@link CartoucheAnalysis.Mode#NEEDS_TILING}).</li>
  * </ul>
  */
@@ -100,15 +103,18 @@ public class TwoPassCartoucheExtractor {
 
         // Passe 1 : localisation grossière sur l'image pleine page (vise la boîte-formulaire, pas le titre).
         CartoucheLocation location = client.locateImage(renderFullPage(pdfBytes));
-        if (location.isUnknown() || !location.cartoucheFound()) {
-            return CartoucheAnalysis.needsTiling(location.corner(), location.raw());
-        }
+        boolean located = !location.isUnknown() && location.cartoucheFound();
 
-        // Passe 2 + contrôle qualité, avec repli ordonné sur les autres coins si besoin.
-        List<String> candidates = candidateOrder(location.corner());
+        // Coins à essayer en passe 2 : la zone de la passe 1 en tête si elle a réussi ; sinon on
+        // balaie les coins prioritaires. Sur un très grand plan très dense (ex. 21.pdf, A0), la
+        // localisation pleine page échoue souvent ('unknown') — le cartouche est illisible après le
+        // redimensionnement —, mais l'extraction d'un coin recadré à haute résolution, elle, réussit.
+        // On balaie donc les coins avec le MÊME mécanisme (extraction + contrôle qualité), sans
+        // logique de fusion : on s'arrête au premier coin qui produit un vrai cartouche.
+        List<String> candidates = located ? candidateOrder(location.corner()) : CORNER_PRIORITY;
         CartoucheExtraction best = null;
         JsonNode bestRawAnnotation = null;
-        String bestCorner = location.corner();
+        String bestCorner = located ? location.corner() : null;
         int attempts = 0;
 
         for (String corner : candidates) {
@@ -126,7 +132,12 @@ public class TwoPassCartoucheExtractor {
             }
         }
 
-        // Aucun coin n'a passé le contrôle qualité : on renvoie le meilleur essai, non validé.
+        // Aucun coin n'a passé le contrôle qualité.
+        if (!located) {
+            // La localisation a échoué ET le balayage des coins n'a rien donné : vraiment non localisable.
+            return CartoucheAnalysis.needsTiling(location.corner(), location.raw());
+        }
+        // Localisé mais aucun coin validé : on renvoie le meilleur essai, non validé.
         return CartoucheAnalysis.twoPassCrop(bestCorner, best, bestRawAnnotation,
                 location.raw(), false, attempts);
     }

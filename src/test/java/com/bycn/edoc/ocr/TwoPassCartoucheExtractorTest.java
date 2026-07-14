@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -69,16 +70,43 @@ class TwoPassCartoucheExtractorTest {
     }
 
     @Test
-    void large_plan_with_unknown_localization_asks_for_tiling() throws Exception {
+    void unknown_localization_sweeps_the_corners_then_asks_for_tiling_only_if_none_pass() throws Exception {
+        // Localisation 'unknown' : on ne renonce pas tout de suite, on balaie les 4 coins prioritaires.
         byte[] pdf = pageBytes(new PDRectangle(3000, 2000));
         MistralOcrClient client = mock(MistralOcrClient.class);
         when(client.locateImage(any())).thenReturn(new CartoucheLocation(false, "unknown", null));
+        // Aucun coin ne ressemble à un cartouche.
+        when(client.analyzeImage(any()))
+                .thenReturn(new OcrResult(null, null, new CartoucheExtraction(false, List.of())));
         TwoPassCartoucheExtractor extractor = new TwoPassCartoucheExtractor(client);
 
         CartoucheAnalysis analysis = extractor.extract(pdf);
 
+        // Ce n'est qu'après échec des 4 coins qu'on signale le besoin de tuiles.
         assertThat(analysis.mode()).isEqualTo(CartoucheAnalysis.Mode.NEEDS_TILING);
-        verify(client, never()).analyzeImage(any());
+        verify(client, times(4)).analyzeImage(any());
+    }
+
+    @Test
+    void unknown_localization_still_recovers_when_a_corner_crop_passes_quality() throws Exception {
+        // Cas 21.pdf : la localisation pleine page échoue, mais l'extraction d'un coin recadré réussit.
+        byte[] pdf = pageBytes(new PDRectangle(3000, 2000));
+        MistralOcrClient client = mock(MistralOcrClient.class);
+        when(client.locateImage(any())).thenReturn(new CartoucheLocation(false, "unknown", null));
+        when(client.analyzeImage(any())).thenReturn(resultOf(
+                new CartoucheField("PROJET", "54B"),
+                new CartoucheField("EMETTEUR", "LACH"),
+                new CartoucheField("PHASE", "EXE"),
+                new CartoucheField("INDICE", "A")));
+        TwoPassCartoucheExtractor extractor = new TwoPassCartoucheExtractor(client);
+
+        CartoucheAnalysis analysis = extractor.extract(pdf);
+
+        // Malgré 'unknown', le balayage récupère le cartouche au premier coin prioritaire.
+        assertThat(analysis.mode()).isEqualTo(CartoucheAnalysis.Mode.TWO_PASS_CROP);
+        assertThat(analysis.qualityPassed()).isTrue();
+        assertThat(analysis.corner()).isEqualTo("bottom-right"); // premier de CORNER_PRIORITY
+        assertThat(analysis.attempts()).isEqualTo(1);
     }
 
     private static byte[] pageBytes(PDRectangle size) throws Exception {
