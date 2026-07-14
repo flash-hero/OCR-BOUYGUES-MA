@@ -14,6 +14,17 @@ par l'encadrant fixe désormais l'implémentation en Java.)_
 > [État actuel — ÉA1](#état-actuel--éa1-mistral-seul) pour installer, configurer et lancer.
 > La suite (classification, validation, API REST, Tesseract) suit le plan en fin de document.
 
+## Documentation
+
+| Fichier | Contenu |
+|---|---|
+| [`docs/understand.md`](docs/understand.md) | Explication complète de l'architecture, en langage simple, avec exemples |
+| [`docs/howtorun.md`](docs/howtorun.md) | Guide pratique pas à pas pour installer et lancer le moteur |
+| [`docs/instruction.md`](docs/instruction.md) | Brief original du projet + état d'avancement à jour |
+| [`docs/AGENT_CONTEXT.md`](docs/AGENT_CONTEXT.md) | Résumé technique dense pour reprendre le projet dans une nouvelle session IA |
+| [`docs/plan_travail_ocr_edoc.md`](docs/plan_travail_ocr_edoc.md) | Plan de travail détaillé (étapes É1 à É8) |
+| [`docs/Cahier des charges 1er Phase OCR.pdf`](<docs/Cahier des charges 1er Phase OCR.pdf>) | Cahier des charges original de l'encadrant |
+
 ---
 
 ## Principe : un lecteur, plusieurs vérificateurs
@@ -151,7 +162,7 @@ Trois particularités Azure gérées par le code :
 ## 1. Vérifier l'environnement
 
 ```powershell
-./check_setup.ps1
+./scripts/check_setup.ps1
 ```
 
 Contrôle, en échouant **proprement** (jamais de stack trace) : JDK 17 actif, javac 17, `JAVA_HOME`,
@@ -161,7 +172,7 @@ sortie non nul si un point bloquant manque. Option `-SkipMaven` pour sauter la r
 ## 2. Lancer le test décisif
 
 ```powershell
-./run_smoke.ps1
+./scripts/run_smoke.ps1
 ```
 
 Équivaut à `mvn -DskipTests spring-boot:run "-Dspring-boot.run.profiles=smoke"`. Pour chaque PDF de

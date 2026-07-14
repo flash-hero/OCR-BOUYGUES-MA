@@ -3,7 +3,8 @@
 # Lit tous les *.pdf de data/samples/ et affiche les paires libelle/valeur + le JSON brut.
 
 $ErrorActionPreference = 'Stop'
-$root = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+# Le script vit dans scripts/ : la racine du projet est le dossier parent.
+$root = if ($PSScriptRoot) { Split-Path $PSScriptRoot -Parent } else { (Get-Location).Path }
 
 # Force UTF-8 pour que les accents francais s'affichent correctement.
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8

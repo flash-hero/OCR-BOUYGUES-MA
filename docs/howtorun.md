@@ -27,10 +27,10 @@ précisément ce qui manque.
 
 ## 2. Vérifier que tout est prêt : `check_setup.ps1`
 
-Ouvre un terminal PowerShell à la racine du projet et lance :
+Ouvre un terminal PowerShell **à la racine du projet** et lance :
 
 ```powershell
-./check_setup.ps1
+./scripts/check_setup.ps1
 ```
 
 Ce script vérifie, sans jamais planter avec un message d'erreur incompréhensible :
@@ -46,7 +46,7 @@ Ce script vérifie, sans jamais planter avec un message d'erreur incompréhensib
 - `[FAIL]` en rouge → il faut corriger avant de continuer (le message te dit quoi faire).
 
 Astuce : si tu veux juste vérifier rapidement sans re-télécharger les dépendances Maven à chaque
-fois, utilise `./check_setup.ps1 -SkipMaven`.
+fois, utilise `./scripts/check_setup.ps1 -SkipMaven`.
 
 ---
 
@@ -103,7 +103,7 @@ Place tes fichiers PDF dans le dossier `data/samples/`. Le programme lira **tous
 C'est la commande principale pour voir le moteur en action :
 
 ```powershell
-./run_smoke.ps1
+./scripts/run_smoke.ps1
 ```
 
 Ce que ça fait, concrètement :
@@ -147,7 +147,7 @@ Chaque appel réel à Mistral consomme du crédit API. Un **cache** (une mémoir
 dossier `.ocr-cache/`) évite de rappeler Mistral pour une question déjà posée exactement à
 l'identique.
 
-- **Relancer `./run_smoke.ps1` une deuxième fois sans rien changer** → quasiment 0 appel réseau
+- **Relancer `./scripts/run_smoke.ps1` une deuxième fois sans rien changer** → quasiment 0 appel réseau
   (tout vient du cache), donc quasiment gratuit.
 - **Si tu modifies un document, ou le code qui décide de la consigne envoyée à Mistral** (le prompt,
   la résolution de l'image...) → le cache pour ce document précis se recalcule automatiquement (c'est
@@ -220,7 +220,7 @@ position à l'avance, voir `understand.md` §5 Étape 2).
 ## 10. Résumé express (si tu as déjà tout configuré une fois)
 
 ```powershell
-./check_setup.ps1      # vérifier que tout va bien (optionnel si déjà fait récemment)
-./run_smoke.ps1         # lancer le test sur tous les PDF de data/samples/
-mvn test                 # lancer les tests automatiques (aucun appel réseau)
+./scripts/check_setup.ps1   # vérifier que tout va bien (optionnel si déjà fait récemment)
+./scripts/run_smoke.ps1     # lancer le test sur tous les PDF de data/samples/
+mvn test                    # lancer les tests automatiques (aucun appel réseau)
 ```

@@ -2,8 +2,9 @@
 # check_setup.ps1 — Verifie l'environnement pour eDoc OCR (EA1, Mistral seul).
 # Objectif : echouer proprement et lisiblement si quelque chose manque, sans stack trace.
 #
-# Usage :  ./check_setup.ps1            (verifie tout, resout les dependances Maven)
-#          ./check_setup.ps1 -SkipMaven (saute la resolution Maven, plus rapide)
+# Usage (depuis la racine du projet) :
+#   ./scripts/check_setup.ps1            (verifie tout, resout les dependances Maven)
+#   ./scripts/check_setup.ps1 -SkipMaven (saute la resolution Maven, plus rapide)
 
 param(
     [switch]$SkipMaven
@@ -39,7 +40,8 @@ function Get-JavaMajor {
 
 Write-Host ''
 Write-Host '=== check_setup — eDoc OCR (EA1 / Mistral) ===' -ForegroundColor Cyan
-$root = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+# Le script vit dans scripts/ : la racine du projet est le dossier parent.
+$root = if ($PSScriptRoot) { Split-Path $PSScriptRoot -Parent } else { (Get-Location).Path }
 Write-Host "Racine projet : $root"
 Write-Host ''
 

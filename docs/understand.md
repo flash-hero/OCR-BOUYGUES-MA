@@ -260,10 +260,16 @@ OCR-PFA/
 │   ├── application.yml                       (réglages du programme)
 │   └── application-smoke.yml                 (réglages spéciaux pour le mode test)
 ├── data/samples/                             (les 27 PDF de test — PAS le produit final, voir §4)
+├── docs/                                      (toute la documentation, ce fichier y compris)
+│   ├── understand.md
+│   ├── howtorun.md
+│   ├── instruction.md
+│   └── AGENT_CONTEXT.md
+├── scripts/
+│   ├── check_setup.ps1                       (vérifie que tout est prêt avant de lancer)
+│   └── run_smoke.ps1                         (lance le test décisif en une commande)
 ├── .env                                       (ta clé secrète Mistral — jamais partagée/publiée)
 ├── .env.example                               (un modèle vide du fichier .env, celui-là est public)
-├── check_setup.ps1                            (vérifie que tout est prêt avant de lancer)
-├── run_smoke.ps1                              (lance le test décisif en une commande)
 └── pom.xml                                    (la liste des outils/bibliothèques utilisées)
 ```
 
