@@ -19,17 +19,19 @@ Mistral OCR, pour préremplir automatiquement un formulaire de dépôt dans l'ap
 
 ## 2. État exact à la fin de cette session
 
-- **Branche** : `main`, dernier commit `18bd7d3` (« feat: classification P3 par fuzzy
-  matching »).
-- **Extraction (P2) terminée et validée** : 27/27 documents du corpus traités (0 erreur).
-- **Classification (P3) terminée et testée** : fuzzy matching déterministe contre
-  `schema_fields.yaml`, assignation gloutonne globale, jamais de perte de paire non
-  classée (`unclassifiedPairs`).
-- **56 tests unitaires**, tous verts (29 existants + 27 nouveaux P3), aucun n'appelle le
+- **Branche** : `main`, dernier commit `5b3c969` (« feat: validation P4 par table de
+  référence »).
+- **Extraction (P2) et classification (P3) terminées et gelées** : voir historique
+  précédent, aucune régression depuis.
+- **Validation (P4) terminée et testée** : matching flou de la valeur classée contre la
+  table de référence CSV du projet (`src/main/resources/projects/{projectCode}/reference_tables/`),
+  règle D11 appliquée uniformément (aucun non-match n'est rejeté, toujours TO_REVIEW).
+  Un champ n'est validé QUE si un fichier CSV existe pour lui — l'absence de fichier
+  déclenche le pass-through, aucune liste de champs codée en dur nulle part.
+- **78 tests unitaires**, tous verts (56 existants + 22 nouveaux P4), aucun n'appelle le
   réseau (`mvn test`).
-- **Prochaine étape non commencée** : validation (P4) — matching flou des valeurs classées
-  contre les tables de référence par projet, statuts `AUTO_VALIDATED` / `TO_REVIEW` /
-  `MISSING` (règle D11).
+- **Prochaine étape non commencée** : P5 — API REST (exposer le pipeline complet
+  upload → extraction → classification → validation → réponse JSON par champ).
 
 ## 3. Principe architectural (invariant, ne pas dévier)
 
@@ -78,12 +80,21 @@ src/main/java/com/bycn/edoc/
     ├── FieldClassifier                    assignation gloutonne globale (fuzzy matching)
     ├── ClassificationConfig / properties  seuil + flag hypothesis-synonyms (application.yml)
     └── records: ClassifiedField, ClassificationResult, FieldStatus
+└── validation/
+    ├── ReferenceTableRegistry            charge les CSV par projet/champ (Commons CSV), cache, liste vide si absent
+    ├── FieldValidator                     matching flou valeur vs code, applique le strip des zéros de tête (numérique pur uniquement)
+    ├── ValidationConfig / properties      seuil de validation (application.yml, distinct du seuil de classification)
+    └── records: ValidatedField, ValidationResult
 ```
 
 Dépendance ajoutée en P3 : `me.xdrop:fuzzywuzzy:1.4.0` (FuzzySearch.ratio) — absente
 jusqu'ici, différée volontairement le temps qu'il n'y ait pas de classification (voir
 instruction.md, stack imposée). Le cache OCR (P2) continue d'utiliser
 `java.security.MessageDigest` (JDK standard), sans lien avec cette nouvelle dépendance.
+
+Dépendance ajoutée en P4 : `org.apache.commons:commons-csv:1.12.0` — listée dans
+`plan_travail_ocr_edoc.md` §2 depuis le début, mais jamais réellement présente dans `pom.xml`
+avant ce commit.
 
 ## 5. Chronologie complète des décisions (avec ce qui a été essayé et rejeté)
 
@@ -163,6 +174,26 @@ Chaque ligne = un problème réel rencontré sur le corpus, la cause, et la corr
     le classement relatif des scores, seulement leur valeur absolue. `rawLabel` et
     `matchedSynonym` restent stockés non normalisés dans `ClassifiedField` (traçabilité).
     Après normalisation, les trois cas ci-dessus passent à 100.
+    **Mise à jour P4** : la visibilité de `LabelNormalizer` est passée de package-private à
+    public, pour être réutilisée par `validation/` sans dupliquer la logique de normalisation
+    (une seule source de vérité — la validation compare des codes courts avec la même
+    sensibilité à la casse et aux accents, donc la même parade s'applique). Comportement
+    inchangé, aucune ligne de logique touchée : les 56 tests P2/P3 restent verts après ce
+    changement.
+
+13. **Zéros de tête ambigus entre deux codes Lot différents** (P4, avant tout commit) →
+    mesure empirique avant d'écrire la logique de comparaison (comme en P3, pas
+    d'hypothèse) : `ratio("003", "03") = 80` (sous le seuil de 85, comme anticipé), mais
+    aussi `ratio("003", "00") = 80` — un score strictement identique entre le bon code
+    (03, Terrassements) et un mauvais (00, Généralités). Un simple ajustement de seuil
+    n'aurait pas résolu cette égalité — elle aurait pu se trancher arbitrairement par
+    l'ordre des lignes du CSV, validant silencieusement le mauvais lot. **Fix** : strip
+    des zéros de tête avant comparaison, appliqué uniquement aux valeurs/codes purement
+    numériques (`003`→`3`, `03`→`3`, `00`→`0` : le bon code obtient 100, le mauvais 0).
+    Codes alphanumériques (`N-1`, `A-B`, `O11`) non affectés. Vérifié ensuite qu'aucun
+    autre couple de codes, sur les 5 tables réelles, n'atteint le seuil de 85 entre eux —
+    le seuil reste donc sûr tel quel, pas besoin d'une logique de désambiguïsation
+    supplémentaire.
 
 ## 6. `TwoPassCartoucheExtractor.extract(byte[])` — logique actuelle exacte
 
