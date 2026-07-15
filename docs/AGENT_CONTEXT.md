@@ -19,14 +19,17 @@ Mistral OCR, pour préremplir automatiquement un formulaire de dépôt dans l'ap
 
 ## 2. État exact à la fin de cette session
 
-- **Branche** : `main`, dernier commit `bedf97e` (« balayer les coins quand la localisation échoue »).
-- **Extraction terminée et validée** : 27/27 documents du corpus (`data/samples/`) traités avec
-  succès (0 erreur, 0 « needs tiling », 0 « à vérifier humainement »).
-- **29 tests unitaires**, tous verts, aucun n'appelle le réseau (`mvn test`).
-- **Aucune régression** en attente : tous les changements décrits ci-dessous sont commités et testés
-  sur le corpus complet, pas seulement sur les documents ciblés par chaque correction.
-- **Prochaine étape non commencée** : classification (répartir chaque paire `label/value` extraite
-  sur le champ demandé par l'appel API du projet eDoc concerné).
+- **Branche** : `main`, dernier commit `18bd7d3` (« feat: classification P3 par fuzzy
+  matching »).
+- **Extraction (P2) terminée et validée** : 27/27 documents du corpus traités (0 erreur).
+- **Classification (P3) terminée et testée** : fuzzy matching déterministe contre
+  `schema_fields.yaml`, assignation gloutonne globale, jamais de perte de paire non
+  classée (`unclassifiedPairs`).
+- **56 tests unitaires**, tous verts (29 existants + 27 nouveaux P3), aucun n'appelle le
+  réseau (`mvn test`).
+- **Prochaine étape non commencée** : validation (P4) — matching flou des valeurs classées
+  contre les tables de référence par projet, statuts `AUTO_VALIDATED` / `TO_REVIEW` /
+  `MISSING` (règle D11).
 
 ## 3. Principe architectural (invariant, ne pas dévier)
 
@@ -69,11 +72,18 @@ src/main/java/com/bycn/edoc/
     ├── OcrConfig                           câblage des beans Spring
     └── records: CartoucheField, CartoucheExtraction, CartoucheLocation, CartoucheAnalysis, OcrResult
 └── smoke/SmokeTestRunner                   outil CLI de test (profil "smoke"), PAS le produit final
+└── classification/
+    ├── SchemaFieldsRegistry              charge schema_fields.yaml (SnakeYAML)
+    ├── LabelNormalizer                    replie accents/casse/espaces avant comparaison
+    ├── FieldClassifier                    assignation gloutonne globale (fuzzy matching)
+    ├── ClassificationConfig / properties  seuil + flag hypothesis-synonyms (application.yml)
+    └── records: ClassifiedField, ClassificationResult, FieldStatus
 ```
 
-Aucune dépendance ajoutée au-delà du socle initial (`spring-boot-starter-web`, PDFBox,
-`spring-boot-starter-test`) — le cache utilise `java.security.MessageDigest` (JDK standard), pas de
-bibliothèque externe.
+Dépendance ajoutée en P3 : `me.xdrop:fuzzywuzzy:1.4.0` (FuzzySearch.ratio) — absente
+jusqu'ici, différée volontairement le temps qu'il n'y ait pas de classification (voir
+instruction.md, stack imposée). Le cache OCR (P2) continue d'utiliser
+`java.security.MessageDigest` (JDK standard), sans lien avec cette nouvelle dépendance.
 
 ## 5. Chronologie complète des décisions (avec ce qui a été essayé et rejeté)
 
@@ -143,6 +153,16 @@ Chaque ligne = un problème réel rencontré sur le corpus, la cause, et la corr
     reproductible de champs réels absents de la liste d'indices (`6.pdf` perd `PROJET` et `AUTEUR`,
     tous deux réels, dans 5/5 runs). **Abandonné** : contraire au principe d'extraction ouverte.
     Aucune autre piste d'indice de champs à explorer — décision actée avec l'utilisateur.
+12. **Fuzzy matching cassé par la casse et les accents** (P3, avant tout commit) → mesure
+    empirique de `FuzzySearch.ratio` avant d'écrire le classifieur (pas d'hypothèse) :
+    "NUM" vs "Num" = 33, "LEVEL" vs "Level" = 20, "EMETTEUR" vs "Émetteur" = 0 — largement
+    sous le seuil de 80. Or ce sont exactement les deux variantes que CLAUDE.md documente
+    comme devant fonctionner (NUM→NUMERO, LEVEL→NIVEAU, corpus réel). **Fix** :
+    `LabelNormalizer` (accents repliés, minuscules, espaces compactés, deux-points finaux
+    retirés), appliqué symétriquement aux deux côtés de la comparaison — n'affecte donc pas
+    le classement relatif des scores, seulement leur valeur absolue. `rawLabel` et
+    `matchedSynonym` restent stockés non normalisés dans `ClassifiedField` (traçabilité).
+    Après normalisation, les trois cas ci-dessus passent à 100.
 
 ## 6. `TwoPassCartoucheExtractor.extract(byte[])` — logique actuelle exacte
 
