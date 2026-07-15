@@ -23,6 +23,7 @@
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <pdfbox.version>3.0.3</pdfbox.version>
         <fuzzywuzzy.version>1.4.0</fuzzywuzzy.version>
+        <commons-csv.version>1.12.0</commons-csv.version>
     </properties>
 
     <dependencies>
@@ -45,6 +46,16 @@
             <groupId>me.xdrop</groupId>
             <artifactId>fuzzywuzzy</artifactId>
             <version>${fuzzywuzzy.version}</version>
+        </dependency>
+
+        <!-- Lecture des tables de reference par projet (P4 validation) :
+             projects/{projectCode}/reference_tables/*.csv, colonnes code,libelle.
+             Les libelles contiennent des virgules entre guillemets ("Curage, Demolitions"),
+             d'ou un vrai parseur CSV plutot qu'un split maison. -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-csv</artifactId>
+            <version>${commons-csv.version}</version>
         </dependency>
 
         <!-- Tests : JUnit 5 + Mockito + AssertJ -->

@@ -1,0 +1,35 @@
+code,libelle
+00,Généralités
+01,"Désamiantage, dépollution, déplombage"
+02,"Curage, Démolitions"
+03,Terrassements
+04,Gros Oeuvre
+05,Etanchéité
+06,Couverture - Bardage
+07,Charpente
+08,Menuiseries extérieures - Occultations
+09,Menuiseries intérieures
+10,Métallerie - Serrurerie
+11,Revêtements de sols
+12,Planchers techniques
+13,Revêtements muraux - Peinture
+14,Revêtements plafonds
+15,Cloisons sèches - Doublages
+16,Serrures
+17,Eléments actifs de sûreté
+18,VRD
+19,CVC - Désenfumage
+20,Electricité - Courants forts
+21,Courants faibles - VDI
+22,Groupe électrogène
+23,Appareils élévateurs
+24,Protection incendie
+25,"Plomberie - Sanitaires, y compris réseaux sous dallage"
+26,Clôtures Portes et Portails
+27,Espaces verts
+28,Mobilier
+29,Cuisine - Chambres froides
+30,Buanderie et Blanchisserie
+31,Signalétique
+98,CFO CFA sureté
+99,CVC PLO

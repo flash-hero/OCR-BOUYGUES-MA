@@ -1,0 +1,33 @@
+code,libelle
+ARM,Plan Armatures
+BIM,Maquette numérique
+CCA,Cahier des Charges Administratives et particulières
+CCT,CCTP
+COF,Plan coffrages
+COU,Coupe
+DET,Détails
+FAC,Façades
+FES,Autocontrôle et Fiches essais
+FMA,Fiche matériaux
+FSL,Fiche synthèse local
+FSY,FdP Synthèse
+FTA,Fiche Travaux d'Adaptation
+HYP,Note d'hypothèse projet
+MET,Doc Méthodes
+NDC,Note de calcul
+O11,Pièces OUV 11 Contractuelles
+PE,Pièce écrite
+PER,Perspectives3D
+PLA,Plan
+PLG,Planning
+PRG,Pièces programmatiques
+QUA,"Charte graphique, cartouches"
+RC,Règlement de consultation
+REP,Plan repérage
+RES,Plan réservations
+SCH,"Synoptique,(Schéma)"
+SEC,"PPSPS, PGC"
+SIT,Dossier de Site
+SYA,Plans de synthèse archi
+SYN,Plan de synthèse technique
+TER,Plan terminaux

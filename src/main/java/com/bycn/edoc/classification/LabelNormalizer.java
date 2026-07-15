@@ -16,8 +16,13 @@ import java.util.Locale;
  * <p>La même normalisation est appliquée aux deux côtés (libellé lu et synonyme), donc elle
  * s'annule et ne fausse pas le score. Les valeurs d'origine sont conservées telles quelles
  * dans {@link ClassifiedField} ({@code rawLabel}, {@code matchedSynonym}).</p>
+ *
+ * <p><b>Portée</b> : public car P4 (validation) réutilise exactement la même normalisation pour
+ * comparer une <i>valeur lue</i> à un <i>code</i> de table de référence — même sensibilité à la
+ * casse et aux accents, donc même parade. Une seule source de vérité, jamais une copie : le
+ * comportement décrit ci-dessus est inchangé, seule la visibilité a été élargie.</p>
  */
-final class LabelNormalizer {
+public final class LabelNormalizer {
 
     private LabelNormalizer() {
     }
@@ -26,7 +31,7 @@ final class LabelNormalizer {
      * Replie les accents, passe en minuscules, compacte les espaces et retire les deux-points
      * finaux (« N° Doc : » et « N° Doc » désignent le même libellé).
      */
-    static String normalize(String raw) {
+    public static String normalize(String raw) {
         if (raw == null || raw.isBlank()) {
             return "";
         }

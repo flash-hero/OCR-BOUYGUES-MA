@@ -30,3 +30,10 @@ edoc:
     # Active les synonymes "hypothesis" de schema_fields.yaml (Specialite/Discipline pour LOT,
     # Doc pour TYPE...). Faux par defaut : Q3 non tranchee avec l'encadrant (voir instruction.md).
     use-hypothesis-synonyms: ${EDOC_CLASSIFICATION_USE_HYPOTHESIS_SYNONYMS:false}
+  validation:
+    # Seuil de correspondance floue (echelle 0-100 de FuzzySearch.ratio) entre une VALEUR lue et un
+    # CODE de table de reference. Plus strict que le seuil de classification (80) : on compare ici
+    # des codes courts ("EXE", "03"), ou un caractere de difference pese beaucoup plus que dans un
+    # libelle. PROVISOIRE : non calibre empiriquement (data/annotations.xlsx pas encore
+    # disponible). Surchargeable sans toucher au code, jamais fige en dur.
+    fuzzy-threshold: ${EDOC_VALIDATION_FUZZY_THRESHOLD:85}
