@@ -22,6 +22,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <pdfbox.version>3.0.3</pdfbox.version>
+        <fuzzywuzzy.version>1.4.0</fuzzywuzzy.version>
     </properties>
 
     <dependencies>
@@ -36,6 +37,14 @@
             <groupId>org.apache.pdfbox</groupId>
             <artifactId>pdfbox</artifactId>
             <version>${pdfbox.version}</version>
+        </dependency>
+
+        <!-- Correspondance floue libelle lu <-> synonyme (P3 classification). Regle non negociable :
+             jamais d'egalite stricte, le corpus contient des variantes ("NUM", "LEVEL"...). -->
+        <dependency>
+            <groupId>me.xdrop</groupId>
+            <artifactId>fuzzywuzzy</artifactId>
+            <version>${fuzzywuzzy.version}</version>
         </dependency>
 
         <!-- Tests : JUnit 5 + Mockito + AssertJ -->

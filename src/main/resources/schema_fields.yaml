@@ -1,0 +1,67 @@
+# Bibliothèque UNIQUE et PARTAGÉE de synonymes de libellés de cartouche, par champ cible.
+# Un seul fichier pour tous les projets eDoc : ce qui change d'un appel API à l'autre,
+# c'est le SOUS-ENSEMBLE de champs actifs (requiredFields), jamais le contenu de ce fichier.
+#
+# Usage : P3 (classification) UNIQUEMENT — compare un LIBELLE LU (ex. "N° Doc") à ces
+# synonymes. Ne pas confondre avec P4 (validation), qui compare une VALEUR LUE
+# (ex. "EX3") aux tables de référence de src/main/resources/projects/{projectCode}/reference_tables/*.csv.
+#
+# Matching : toujours flou (fuzzy), jamais == strict (règle CLAUDE.md non-négociable #3).
+
+fields:
+
+  PHASE:
+    confirmed: [Phase, Pha]
+    hypothesis: []
+
+  EMETTEUR:
+    confirmed: [Emetteur, Émetteur, Emet]
+    hypothesis: []
+
+  LOT:
+    confirmed: [Lot]
+    hypothesis: [Spécialité, Specialite, Discipline]   # Q3 — non tranché avec l'encadrant
+
+  TYPE:
+    confirmed: [Type, Typ]
+    hypothesis: [Doc]   # Q3 — non tranché ; risque de collision avec "N° Doc" (NUMERO)
+
+  ZONE:
+    confirmed: [Zone, Zon]
+    hypothesis: [Localisation]   # Q3 — non tranché
+
+  NIVEAU:
+    confirmed: [Niveau, Niveaux, Niv, Level]   # "Level" confirmé sur corpus
+    hypothesis: []
+
+  NUMERO:
+    confirmed: ["N° Doc", "N°Doc", "N° GED", "N° Chrono", "N° document", "Num", "Numero", "Numéro"]
+    hypothesis: []
+
+  Indice:
+    confirmed: [Ind, "Ind.", Indice]
+    hypothesis: []
+
+  Titre1:
+    confirmed: [Désignation, Designation, Objet, Titre]
+    hypothesis: []
+
+  Titre2:
+    confirmed: []
+    hypothesis: []
+
+  Titre3:
+    confirmed: []
+    hypothesis: []
+
+  Batiment:
+    confirmed: [Bâtiment, Batiment]
+    hypothesis: []
+
+  FORMAT_DU_PLAN:
+    confirmed: []   # table non confirmée avec l'équipe eDoc — TODO
+    hypothesis: []
+
+  ECHELLE_DU_PLAN:
+    confirmed: []   # idem — TODO
+    hypothesis: []
