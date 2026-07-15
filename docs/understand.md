@@ -39,7 +39,7 @@ Le projet complet (le "cahier des charges") demande deux choses très différent
 1. **Extraction (ce qui est fait aujourd'hui)** : trouver le cartouche sur le document et **recopier
    tout ce qu'il contient**, texte brut, sans deviner à quoi ça sert. Le programme ne sait pas que
    "PHASE" est un champ important pour eDoc — il lit juste ce qui est écrit.
-2. **Classification (la prochaine étape, pas encore construite)** : prendre chaque ligne lue
+2. **Classification (fait, voir §10)** : prendre chaque ligne lue
    (« PHASE : EXE ») et décider sur quel champ du formulaire eDoc elle doit atterrir. Chaque projet
    eDoc a sa propre liste de champs à remplir — donc cette étape a besoin de savoir, à chaque appel,
    quels champs sont demandés.
@@ -61,7 +61,7 @@ classification change selon le projet.
 | Étape | Statut |
 |---|---|
 | **Extraction générique** — trouver et lire le cartouche | ✅ **Terminé et testé sur 27 documents** |
-| **Classification** — ranger chaque paire sur le bon champ du formulaire | ⏳ Pas encore commencé |
+| **Classification** — ranger chaque paire sur le bon champ du formulaire | ✅ **Terminé et testé (56 tests)** |
 | **Validation** — vérifier chaque champ classé contre les listes officielles eDoc | ⏳ Pas encore commencé |
 | **API REST** — exposer tout ça pour que eDoc puisse appeler le moteur | ⏳ Pas encore commencé |
 | **Tesseract (deuxième lecteur)** + comparaison avec Mistral | ⏳ Prévu bien plus tard |
@@ -432,9 +432,10 @@ Suivons un document fictif `plan.pdf` (un très grand plan) du début à la fin 
 - Le moteur d'extraction sait lire correctement le cartouche sur **les 27 documents de test**
   (documents simples A4 et grands plans A0), sans jamais rater un document ni deviner à l'aveugle sa
   position.
-- **29 tests automatiques** vérifient que le code se comporte bien, sans appeler Mistral (gratuits et
+- **56 tests automatiques** vérifient que le code se comporte bien, sans appeler Mistral (gratuits et
   rapides à relancer).
 - Tout le code est sur `main` (la version officielle et à jour du projet) sur GitHub.
-- La prochaine étape (pas encore commencée) est la **classification** : décider, pour chaque paire
-  lue, sur quel champ du formulaire eDoc elle correspond — voir `instruction.md` pour les règles déjà
-  définies pour cette prochaine étape.
+- La **classification** (décider, pour chaque paire lue, sur quel champ du formulaire eDoc elle
+  correspond) est terminée et testée. La prochaine étape (pas encore commencée) est la
+  **validation** : comparer chaque champ classé aux listes officielles eDoc — voir `instruction.md`
+  pour les règles déjà définies pour cette prochaine étape.

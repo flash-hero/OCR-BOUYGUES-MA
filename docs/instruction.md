@@ -110,11 +110,13 @@ pas être représentatif sur les cas difficiles.
 
 ### Ce qui reste à faire (par ordre logique)
 
-1. **Classification** — ranger chaque paire `(libellé, valeur)` extraite sur le bon champ demandé par
-   l'appel API pour le projet eDoc concerné, via correspondance floue (jamais d'égalité stricte —
-   voir règle de conception plus haut). **Prochaine étape, pas encore commencée.**
+1. ~~**Classification** — ranger chaque paire `(libellé, valeur)` extraite sur le bon champ demandé
+   par l'appel API pour le projet eDoc concerné, via correspondance floue (jamais d'égalité stricte —
+   voir règle de conception plus haut).~~ **Fait** (commit `18bd7d3`) : fuzzy matching déterministe
+   contre `schema_fields.yaml`, assignation gloutonne globale, 56 tests verts.
 2. **Validation** — vérifier chaque champ classé contre la table de référence de son projet, avec la
    règle D11 (aucun rejet automatique silencieux, toujours `TO_REVIEW` pour une valeur inconnue).
+   **Prochaine étape, pas encore commencée.**
 3. **API REST** — exposer le pipeline complet (upload → extraction → classification → validation →
    réponse JSON par champ). Le moteur actuel n'a **pas** d'API fonctionnelle ; `SmokeTestRunner` est un
    outil de test en ligne de commande, pas le produit final.
@@ -134,7 +136,9 @@ pas être représentatif sur les cas difficiles.
 | Config | SnakeYAML | inclus avec Spring Boot |
 | Tests | JUnit 5 + Mockito | `spring-boot-starter-test` |
 
-**Ne pas ajouter maintenant** (arriveront en phase B, dédiée à Tesseract) : Tess4J, OpenCV Java, fuzzywuzzy — inutiles tant qu'il n'y a qu'un seul moteur et pas de classification/validation dans cette session.
+**Ajouté depuis** : `me.xdrop:fuzzywuzzy:1.4.0` (P3, classification — voir commit `18bd7d3`).
+**Ne pas ajouter maintenant** (arriveront en phase B, dédiée à Tesseract) : Tess4J, OpenCV Java —
+inutiles tant qu'il n'y a qu'un seul moteur de lecture.
 
 Modèle Mistral OCR **épinglé** : `mistral-ocr-4-0` (jamais `mistral-ocr-latest`, pour que les résultats restent reproductibles d'un run à l'autre).
 
