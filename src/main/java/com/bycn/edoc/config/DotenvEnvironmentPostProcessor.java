@@ -12,6 +12,7 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.env.EnvironmentPostProcessor;
 import org.springframework.core.env.ConfigurableEnvironment;
 import org.springframework.core.env.MapPropertySource;
+import org.springframework.core.env.MutablePropertySources;
 import org.springframework.core.env.StandardEnvironment;
 
 /**
@@ -22,15 +23,40 @@ import org.springframework.core.env.StandardEnvironment;
  * <p>Permet d'écrire {@code ${MISTRAL_API_KEY}} dans application.yml sans dépendance externe.
  * Le fichier {@code .env} est optionnel : son absence n'est pas une erreur (c'est {@code check_setup}
  * qui diagnostique l'absence de clé).</p>
+ *
+ * <p><b>Les valeurs ne sont jamais recopiées dans les propriétés système de la JVM</b>
+ * ({@code System.setProperty}), et c'est délibéré : la source de propriétés ci-dessous suffit à
+ * résoudre les {@code ${...}}, alors qu'un export global aurait trois défauts, tous constatés en
+ * test avant correction — il écrit la clé API dans un état global lisible par tout le processus ;
+ * il <i>inverse</i> la priorité voulue, car {@code systemProperties} prime sur
+ * {@code systemEnvironment} et la valeur du fichier finissait par battre une vraie variable
+ * d'environnement ; et il rend le post-processeur non idempotent, le second passage retrouvant sa
+ * propre valeur et n'ajoutant plus aucune source.</p>
  */
 public class DotenvEnvironmentPostProcessor implements EnvironmentPostProcessor {
 
     private static final String SOURCE_NAME = "dotenvFile";
     private static final String DEFAULT_FILE = ".env";
 
+    private final Path envFile;
+
+    /** Constructeur utilisé par Spring (déclaré dans {@code META-INF/spring.factories}). */
+    public DotenvEnvironmentPostProcessor() {
+        this(Path.of(DEFAULT_FILE));
+    }
+
+    /**
+     * Visible pour test : permet de pointer un {@code .env} temporaire. Sans ce point d'entrée, un
+     * test de {@link #postProcessEnvironment} lirait le {@code .env} réel du poste (avec la vraie
+     * clé), ce qui rendrait le test dépendant de la machine — c'est la raison pour laquelle cette
+     * méthode n'avait aucune couverture jusqu'ici.
+     */
+    DotenvEnvironmentPostProcessor(Path envFile) {
+        this.envFile = envFile;
+    }
+
     @Override
     public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {
-        Path envFile = Path.of(DEFAULT_FILE);
         if (!Files.isRegularFile(envFile)) {
             return;
         }
@@ -42,15 +68,32 @@ public class DotenvEnvironmentPostProcessor implements EnvironmentPostProcessor 
         for (Map.Entry<String, Object> entry : values.entrySet()) {
             if (environment.getProperty(entry.getKey()) == null) {
                 effectiveValues.put(entry.getKey(), entry.getValue());
-                if (System.getProperty(entry.getKey()) == null) {
-                    System.setProperty(entry.getKey(), String.valueOf(entry.getValue()));
-                }
             }
         }
         if (effectiveValues.isEmpty()) {
             return;
         }
-            environment.getPropertySources().addFirst(new MapPropertySource(SOURCE_NAME, effectiveValues));
+        addBelowRealEnvironmentVariables(environment.getPropertySources(),
+                new MapPropertySource(SOURCE_NAME, effectiveValues));
+    }
+
+    /**
+     * Insère le {@code .env} juste <b>après</b> les vraies variables d'environnement, donc à une
+     * priorité inférieure (voir le contrat en tête de classe).
+     *
+     * <p>Le repli sur {@code addLast} n'est pas décoratif : {@code addAfter} lève
+     * {@code IllegalArgumentException} si la source nommée est absente, ce qui ferait échouer le
+     * démarrage sur tout environnement qui n'expose pas {@code systemEnvironment} (un
+     * {@code MockEnvironment} de test, par exemple). Le rang visé — sous les vraies variables —
+     * est de toute façon celui qu'obtient {@code addLast} quand cette source n'existe pas.</p>
+     */
+    private static void addBelowRealEnvironmentVariables(MutablePropertySources sources, MapPropertySource dotenv) {
+        String realEnvironmentVariables = StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME;
+        if (sources.contains(realEnvironmentVariables)) {
+            sources.addAfter(realEnvironmentVariables, dotenv);
+        } else {
+            sources.addLast(dotenv);
+        }
     }
 
     /** Parse un fichier {@code .env} en couples clé/valeur (visible pour test). */
