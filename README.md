@@ -226,6 +226,58 @@ Diagnostic : la propriété `edoc.force-corner` (ex. `-Dedoc.force-corner=bottom
 de découpage et court-circuite la passe 1 + le repli — utile pour isoler « le découpage marche-t-il ? »
 de « la localisation est-elle correcte ? ». Vide en production.
 
+## Fiabilité et latence de l'extraction (consensus, score de coin, vague unique)
+
+Constat vérifié sur la référence API Mistral : l'endpoint `/v1/ocr` n'expose **ni `temperature`, ni
+`seed`, ni `random_seed`** — deux requêtes strictement identiques peuvent renvoyer des résultats
+différents (mesuré : `12.pdf` a basculé `cartoucheFound` true→false d'un run à l'autre ; `15.pdf`
+77→19 paires). Impossible de fixer la reproductibilité au niveau de la requête.
+
+**Consensus (`OcrConsensus.java`).** Chaque appel OCR est échantillonné **`mistral.ocr.samples` fois
+en parallèle** (5 par défaut). Le résultat retenu : vote majoritaire sur `cartoucheFound`, puis médiane
+basse du nombre de paires parmi le camp majoritaire — jamais de fusion ni de filtrage de paires, on
+choisit un échantillon réel, verbatim. Le résultat du vote est ce qui est figé dans le cache : un
+document déjà traité ne recoûte rien. Un échantillon dont le JSON est tronqué/malformé est traité
+comme « pas d'extraction » plutôt que de faire échouer tout le document. `mistral.ocr.max-retries`
+(2 par défaut) réessaie avec back-off exponentiel sur 429/503/timeout.
+
+**Score de coin (`CartoucheScore.java`).** Sur `20.pdf`, le panneau des intervenants (adresses,
+téléphones, rôles) passait le contrôle `CartouchePlausibility` — il a bien des lignes courtes remplies
+— mais n'est pas le cartouche. `CartoucheScore` note chaque extraction : bonus pour les libellés
+d'identification (Phase, Indice, Échelle, Lot, N° document...) et les valeurs courtes de type code,
+malus pour les signaux d'adresse/téléphone/e-mail/rôle d'intervenant. Parmi les coins qui passent le
+contrôle qualité, `TwoPassCartoucheExtractor` retient désormais le **meilleur score**, pas le premier
+qui passe — `20.pdf` renvoie maintenant le vrai bloc d'identification.
+
+**Une seule vague réseau, Passe 1 désactivée par défaut.** Mesuré (docs 11/12/16/20, caches vides) :
+le coût dominant est le **temps d'OCR par appel**, proportionnel au volume de texte de l'image envoyée
+— pas le nombre d'appels en soi. La Passe 1 (localisation pleine page) OCRise tout le plan sur un
+document dense : c'était l'appel le plus lent (~40 % du temps total), pour un rôle qui ne sert qu'à
+départager le score entre coins à égalité. Elle a donc été **désactivée par défaut**
+(`mistral.ocr.locate-enabled=false`, réactivable sans changement de code) après avoir vérifié qu'elle
+choisissait le même coin que le score seul sur les documents testés. Les quatre coins candidats sont
+maintenant rendus (CPU) puis analysés (réseau) **tous en même temps**, au lieu d'un balayage séquentiel.
+
+Deux leviers de latence testés et **rejetés sur mesure** : réduire `crop-long-px` (3400→2400) n'a
+donné aucun gain de temps et a dégradé une lecture (`16.pdf` 13→29 paires, lecture confuse) ;
+réduire `corner-fraction` (0.40→0.28) a coupé le cartouche d'un document (`12.pdf`, tous les coins
+vides → `NEEDS_TILING`). Les deux réglages restent à leur valeur d'origine.
+
+Profil de latence livré (mesuré, run isolé) : pages standard ~5-15 s, grands plans ~13-25 s, les trois
+plans A0 les plus denses du corpus ~26-28 s — plancher d'un appel unique à pleine exactitude sur ce
+volume de texte ; descendre en dessous dégrade la lecture plutôt que de l'accélérer (mesuré deux fois).
+
+Réglages exposés (`mistral.ocr.*`, tous surchargeables sans toucher au code) :
+
+| Propriété | Défaut | Rôle |
+|---|---|---|
+| `samples` | 5 | Échantillons par appel (consensus) |
+| `max-retries` | 2 | Nouvelles tentatives sur 429/503/timeout, back-off exponentiel |
+| `crop-long-px` | 3400 | Résolution du découpage de coin envoyé à Mistral |
+| `locate-long-px` | 1400 | Résolution du rendu pleine page pour la Passe 1 |
+| `corner-fraction` | 0.40 | Fraction de page prise depuis chaque coin |
+| `locate-enabled` | false | Active la Passe 1 (départage uniquement ; désactivée par défaut, voir ci-dessus) |
+
 ## Structure du code (ÉA1)
 
 ```
@@ -233,12 +285,14 @@ src/main/java/com/bycn/edoc
 ├─ EdocOcrApplication.java            # main Spring Boot
 ├─ config/DotenvEnvironmentPostProcessor.java  # charge .env sans dépendance externe
 ├─ ocr/
-│  ├─ MistralOcrProperties.java       # config mistral.ocr.* (modèle épinglé)
-│  ├─ MistralOcrClient.java           # POST /v1/ocr : analyze / locate / analyzeImage
+│  ├─ MistralOcrProperties.java       # config mistral.ocr.* (modèle épinglé, samples, latence)
+│  ├─ MistralOcrClient.java           # POST /v1/ocr : analyze / locate, échantillonnage parallèle
+│  ├─ OcrConsensus.java               # vote majoritaire sur N échantillons (non-déterminisme)
 │  ├─ CartoucheAnnotationSchema.java  # schéma OUVERT d'extraction + prompt
 │  ├─ CartoucheLocationSchema.java    # schéma de localisation (passe 1, zone)
-│  ├─ TwoPassCartoucheExtractor.java  # orchestration grands formats + contrôle qualité + repli
-│  ├─ CartouchePlausibility.java      # « ça ressemble à un cartouche ? »
+│  ├─ TwoPassCartoucheExtractor.java  # orchestration grands formats : vague unique + sélection
+│  ├─ CartouchePlausibility.java      # « ça ressemble à un cartouche ? » (contrôle de forme)
+│  ├─ CartoucheScore.java             # départage entre coins plausibles (contrôle de contenu)
 │  ├─ CropRegion.java                 # zone → rectangle de découpage
 │  ├─ CartoucheField / CartoucheExtraction / CartoucheLocation / OcrResult / CartoucheAnalysis  # records
 │  ├─ PdfSupport.java                 # base64, dimensions, rendu d'une région (PDFBox)

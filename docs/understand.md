@@ -61,8 +61,8 @@ classification change selon le projet.
 | Étape | Statut |
 |---|---|
 | **Extraction générique** — trouver et lire le cartouche | ✅ **Terminé et testé sur 27 documents** |
-| **Classification** — ranger chaque paire sur le bon champ du formulaire | ✅ **Terminé et testé (56 tests)** |
-| **Validation** — vérifier chaque champ classé contre les listes officielles eDoc | ⏳ Pas encore commencé |
+| **Classification** — ranger chaque paire sur le bon champ du formulaire | ✅ **Terminé et testé** |
+| **Validation** — vérifier chaque champ classé contre les listes officielles eDoc | ✅ **Terminé et testé** |
 | **API REST** — exposer tout ça pour que eDoc puisse appeler le moteur | ⏳ Pas encore commencé |
 | **Tesseract (deuxième lecteur)** + comparaison avec Mistral | ⏳ Prévu bien plus tard |
 
@@ -228,6 +228,110 @@ l'avance ce qui doit exister**. On a donc **annulé cette idée** et gardé la v
 sans indice de champs. Ce n'est pas un échec : tester une idée, mesurer qu'elle ne marche pas bien, et
 revenir en arrière proprement, c'est aussi une façon normale et saine d'avancer.
 
+### Étape 9 — "Poser deux fois exactement la même question ne donne pas toujours la même réponse"
+
+En comparant deux lancements sur le même document, avec exactement les mêmes octets envoyés à
+Mistral, on a eu une mauvaise surprise : parfois la réponse change. Sur un document (`12.pdf`), un
+lancement a trouvé 9 paires et a dit "oui, j'ai trouvé un cartouche" ; un autre lancement, sur la
+**même image, avec la même question**, a répondu "non, je ne trouve rien". Sur un autre document
+(`26.pdf`), le nombre de paires trouvées a varié entre 61 et 9 selon le tirage.
+
+**Pourquoi ça arrive ?** Ce n'est pas un bug de notre code : c'est une propriété du service Mistral
+lui-même. On a vérifié dans la documentation officielle de l'API s'il existait un réglage du genre
+"donne-moi toujours exactement la même réponse" (souvent appelé *seed* ou *temperature* sur d'autres
+services d'IA) — il n'en existe **aucun** sur cet endpoint précis. Impossible donc de "forcer" la
+reproductibilité d'un seul coup de téléphone à Mistral.
+
+**Solution : ne plus se fier à une seule réponse, mais à un vote.** Au lieu de poser la question une
+seule fois, le programme la pose maintenant **5 fois d'un coup, en même temps** (donc ça ne prend pas
+plus de temps, voir Étape 11), et regarde les 5 réponses ensemble :
+1. Si la majorité des réponses dit "oui, cartouche trouvé", on fait confiance à ce camp majoritaire
+   (sinon, au camp qui dit "non").
+2. Parmi les réponses du camp gagnant, on garde celle qui a un nombre de paires **ni trop petit ni
+   trop grand** (la médiane) — jamais la réponse "vide" par accident, ni la réponse qui a
+   exceptionnellement trouvé beaucoup trop de choses.
+
+> **Analogie simple.** C'est comme demander à 5 personnes de lire un mot flou sur une photo : si 4
+> disent "PHASE" et une dit autre chose, on suit les 4. Et si les réponses valables donnent des
+> longueurs différentes de texte recopié, on garde celle qui a l'air la plus "normale", pas celle qui
+> n'a presque rien recopié, ni celle qui a recopié un texte anormalement long.
+
+Ce mécanisme de vote s'appelle le **consensus** (`OcrConsensus.java`, voir §6).
+
+### Étape 10 — "Une mauvaise zone peut, elle aussi, ressembler à un cartouche"
+
+Sur un document (`20.pdf`), le programme a longtemps renvoyé la **mauvaise boîte** : au lieu du petit
+cartouche d'identification, il recopiait un grand tableau listant les intervenants du chantier —
+l'entreprise, le maître d'œuvre, le bureau de contrôle — avec leurs **adresses postales complètes et
+leurs numéros de téléphone**.
+
+**Pourquoi le contrôle qualité (Étape 3-4) laissait passer cette erreur ?** Ce contrôle vérifiait
+seulement "y a-t-il des lignes courtes remplies ?" — et ce tableau d'intervenants en a bien (des noms
+de sociétés courts, des numéros). Il ressemblait donc, au sens strict de la règle, à un cartouche.
+
+**Solution : un score qui regarde *ce qui est écrit*, pas juste *la forme*.** On a ajouté un système
+de notation (`CartoucheScore.java`) qui donne des points **en plus** ou **en moins** selon le contenu
+de chaque paire lue :
+- **Points en plus** pour les libellés typiques d'un cartouche d'identification (Phase, Indice,
+  Échelle, Lot, N° document...) et pour les valeurs courtes de type code.
+- **Points en moins** pour tout ce qui ressemble à une adresse (rue, cedex...), un numéro de
+  téléphone (beaucoup de chiffres à la suite), un code postal, une adresse e-mail, ou un rôle
+  d'intervenant (constructeur, mainteneur, coordonnateur...).
+
+Maintenant, quand plusieurs coins passent le contrôle qualité de base, le programme ne garde plus
+"le premier qui passe" — il garde **celui qui obtient le meilleur score**. Résultat : sur `20.pdf`, le
+panneau des intervenants (score très négatif) perd face au vrai cartouche d'identification (score
+positif), même si le panneau des intervenants avait été essayé en premier.
+
+### Étape 11 — "Aller plus vite sans perdre en exactitude"
+
+Sur certains très grands plans, lire le cartouche prenait longtemps — parfois plus d'une minute pour
+un seul document. Plutôt que de deviner pourquoi, on a **chronométré chaque étape séparément** pour
+trouver le vrai responsable.
+
+**Découverte n° 1 : le temps dépend du texte à lire, pas du nombre d'appels.** On a isolé un seul
+document, tout seul, sans aucun autre traitement en même temps — et il a quand même pris plusieurs
+dizaines de secondes. Ce n'était donc pas "trop d'appels à la suite qui se bousculent" : c'est que
+**chaque appel à Mistral prend plus de temps quand l'image envoyée contient beaucoup de texte dense**
+(un plan A0 très chargé), un peu comme il faut plus de temps pour lire à voix haute une page pleine de
+texte qu'une page presque vide.
+
+**Découverte n° 2 : la Passe 1 (deviner le coin) était l'appel le plus lent de tous.** La Passe 1
+envoie **la page entière** à Mistral — sur un plan dense, c'est donc un OCR complet de tout le plan,
+même si on ne lui demande qu'une réponse grossière ("quel coin ?"). En mesurant, on s'est rendu compte
+qu'elle représentait à elle seule près de la moitié du temps total, pour un rôle qui n'est, au fond,
+que de **départager** entre plusieurs coins quand le score (Étape 10) hésite.
+
+**Ce qu'on a changé :**
+1. **Une seule vague au lieu de plusieurs.** Avant, le programme essayait un coin, attendait la
+   réponse, puis essayait le suivant si besoin — les temps s'additionnaient. Maintenant, les **quatre
+   coins candidats sont envoyés à Mistral en même temps** (en parallèle), comme si on envoyait quatre
+   équipes de recherche dans quatre pièces en même temps au lieu de les envoyer une par une.
+2. **La Passe 1 désactivée par défaut.** Comme elle ne sert qu'à départager, et qu'en la testant on a
+   vu que le score (Étape 10) choisissait **exactement le même coin** avec ou sans elle sur les
+   documents essayés, on l'a désactivée par défaut — ça évite de payer son coût (le plus lent) pour un
+   rôle de simple appoint. Elle reste réactivable par un réglage, sans toucher au code, si un jour ça
+   s'avère utile sur d'autres documents.
+3. **Deux idées essayées, puis abandonnées (mesurées, pas supposées).** On a testé si envoyer une image
+   plus petite à Mistral irait plus vite : mesuré que **non**, et en plus ça a dégradé la lecture d'un
+   document (13 paires bien lues devenues 29 paires confuses). On a aussi testé si découper une zone
+   plus petite autour du coin irait plus vite : mesuré que ça **coupait carrément le cartouche** sur un
+   autre document. Les deux idées ont été annulées — exactement comme à l'Étape 8, on teste, on
+   mesure, et si ça ne marche pas vraiment, on revient en arrière plutôt que de garder une fausse bonne
+   idée.
+4. **Un échantillon raté ne fait plus planter tout le document.** Il arrive qu'un des 5 échantillons du
+   vote (Étape 9) revienne avec une réponse coupée en plein milieu (illisible). Avant, ça faisait
+   planter tout le document avec une erreur. Maintenant, cet échantillon raté compte juste comme "rien
+   trouvé" pour ce tirage-là, et le vote continue avec les 4 autres. En bonus, si Mistral répond
+   temporairement "trop de demandes à la fois" ou qu'il y a un petit souci réseau, le programme
+   **réessaie automatiquement** une ou deux fois avant d'abandonner.
+
+**Résultat mesuré :** les documents standards se lisent maintenant en 5 à 15 secondes, la plupart des
+grands plans en 13 à 25 secondes. Les trois plans A0 les plus denses et les plus lourds du corpus
+restent autour de 26 à 28 secondes — c'est le temps d'**un seul** appel Mistral à pleine qualité sur ce
+genre de document ; descendre en dessous, on l'a mesuré deux fois, dégrade la lecture plutôt que de
+la rendre plus rapide.
+
 ---
 
 ## 6. L'architecture : dossier par dossier, fichier par fichier
@@ -243,10 +347,12 @@ OCR-PFA/
 │   ├── ocr/                                  (TOUT le cœur du moteur est ici)
 │   │   ├── MistralOcrProperties.java
 │   │   ├── MistralOcrClient.java
+│   │   ├── OcrConsensus.java
 │   │   ├── CartoucheAnnotationSchema.java
 │   │   ├── CartoucheLocationSchema.java
 │   │   ├── TwoPassCartoucheExtractor.java
 │   │   ├── CartouchePlausibility.java
+│   │   ├── CartoucheScore.java
 │   │   ├── CropRegion.java
 │   │   ├── PdfSupport.java
 │   │   ├── OcrResponseCache.java
@@ -314,24 +420,42 @@ la page) pour ne pas rater le cartouche si la Passe 1 s'est un peu trompée.
 
 **6. `MistralOcrClient.java`** — le "téléphone" qui appelle réellement Mistral sur internet. Il
 prépare la requête, l'envoie, et transforme la réponse (du texte JSON) en objets Java faciles à
-utiliser dans le reste du programme.
+utiliser dans le reste du programme. Depuis l'Étape 9, c'est aussi lui qui envoie les **5 échantillons
+en parallèle** pour chaque question posée, plutôt qu'une seule fois.
 
-**7. `OcrResponseCache.java`** — la "mémoire" qui évite de rappeler Mistral pour une question déjà
-posée (voir Étape 6 plus haut).
+**7. `OcrConsensus.java`** — le "compteur de votes" (voir Étape 9). Reçoit les 5 réponses d'un même
+appel et décide laquelle garder : vote majoritaire sur "cartouche trouvé ou pas", puis, parmi le camp
+gagnant, celle dont le nombre de paires est ni trop petit ni trop grand. Ne fusionne ni ne modifie
+jamais une paire — il choisit juste **laquelle des 5 réponses réelles** on garde, telle quelle.
 
-**8. `CartouchePlausibility.java`** — le videur à l'entrée : "est-ce que ce qu'on vient de lire
-ressemble vraiment à un cartouche, ou est-ce qu'on s'est trompé de zone ?" (voir Étape 3 plus haut).
+**8. `OcrResponseCache.java`** — la "mémoire" qui évite de rappeler Mistral pour une question déjà
+posée (voir Étape 6 plus haut). C'est le **résultat du vote** (pas chaque échantillon individuel) qui
+est mémorisé : relancer sur un document déjà traité renvoie directement ce résultat, sans reposer les
+5 questions.
 
-**9. `TwoPassCartoucheExtractor.java`** — **le chef d'orchestre.** C'est ce fichier qui décide, pour
-chaque document : "est-ce un document simple (une seule lecture directe) ou un grand plan (deux
-passes) ?", qui déclenche la Passe 1 puis la Passe 2, qui vérifie la qualité, et qui relance sur
-d'autres coins si besoin (voir Étapes 1, 4 et 7). C'est le fichier le plus important à comprendre si
-tu veux suivre "le voyage" d'un document du début à la fin.
+**9. `CartouchePlausibility.java`** — le premier videur à l'entrée : "est-ce que ce qu'on vient de lire
+ressemble à un formulaire de codes courts remplis, ou est-ce qu'on s'est trompé de zone ?" (voir
+Étape 3 plus haut).
 
-**10. `OcrConfig.java`** — le fichier qui "branche" tous les morceaux ensemble au démarrage (un peu
-comme un plan de câblage électrique : il dit "connecte ce fil-là à cette prise-là").
+**10. `CartoucheScore.java`** — le second videur, plus fin (voir Étape 10). Parmi tout ce qui a passé
+le premier videur, il donne une note à chaque coin : des points pour les libellés d'identification
+(Phase, Indice, Échelle...) et les valeurs courtes de type code, des points en moins pour les adresses,
+téléphones, e-mails et rôles d'intervenants. Sert à départager plusieurs coins qui, sans lui,
+sembleraient tous également valables.
 
-**11. Les "boîtes de données"** (`CartoucheField`, `CartoucheExtraction`, `CartoucheLocation`,
+**11. `TwoPassCartoucheExtractor.java`** — **le chef d'orchestre.** C'est ce fichier qui décide, pour
+chaque document : "est-ce un document simple (une seule lecture directe) ou un grand plan ?", qui
+déclenche le rendu des quatre coins et (si activée) la Passe 1 **en une seule vague** (voir Étape 11),
+qui applique les deux videurs (Étapes 9-10), et qui renvoie le meilleur résultat — validé si un coin a
+passé le contrôle, marqué "à vérifier" sinon plutôt que de perdre les données lues. C'est le fichier le
+plus important à comprendre si tu veux suivre "le voyage" d'un document du début à la fin.
+
+**12. `OcrConfig.java`** — le fichier qui "branche" tous les morceaux ensemble au démarrage (un peu
+comme un plan de câblage électrique : il dit "connecte ce fil-là à cette prise-là"), et qui lit les
+réglages de latence de l'Étape 11 (résolution d'image, activer ou non la Passe 1, taille de la zone
+découpée par coin).
+
+**13. Les "boîtes de données"** (`CartoucheField`, `CartoucheExtraction`, `CartoucheLocation`,
 `CartoucheAnalysis`, `OcrResult`) — ce sont de simples petites structures qui transportent
 l'information d'un morceau du programme à un autre, comme des enveloppes étiquetées. Par exemple,
 `CartoucheField` transporte juste une paire `(libellé, valeur)`, par exemple `("PHASE", "EXE")`.
@@ -358,27 +482,34 @@ avoir besoin d'internet. On en a **29**, et ils passent tous.
 Suivons un document fictif `plan.pdf` (un très grand plan) du début à la fin :
 
 1. **On mesure la page.** `PdfSupport` regarde la taille physique de la première page. Si elle fait
-   plus de 430 mm de long (plus grande qu'un A3), c'est un "grand format" → deux passes. Sinon, c'est
-   un document standard → lecture directe.
+   plus de 430 mm de long (plus grande qu'un A3), c'est un "grand format" → analyse par coins. Sinon,
+   c'est un document standard → lecture directe (avec vote, voir point 3).
 
-2. *(Cas grand format)* **Passe 1 : où est le cartouche ?** Le programme dessine une image de toute la
-   page et demande à Mistral : "dans quel coin ?". Mistral répond, par exemple, `"bottom-right"`.
+2. *(Cas grand format)* **Découpage des quatre coins candidats, tous en même temps.** `CropRegion`
+   découpe les quatre coins possibles (bas-droite, bas-gauche, haut-droite, haut-gauche) en rectangles
+   précis, et `PdfSupport` les redessine chacun en très haute résolution (jusqu'à 3400 pixels de
+   large). Si la Passe 1 est activée (désactivée par défaut, voir Étape 11), la page entière est aussi
+   redessinée pour elle, en parallèle du reste.
 
-3. **Découpage.** `CropRegion` transforme `"bottom-right"` en un rectangle précis (les 40 % en bas à
-   droite de la page).
+3. **Vote : chaque coin est interrogé 5 fois d'un coup.** Pour chaque coin (et pour la Passe 1 si
+   activée), le programme envoie la même question à Mistral **5 fois en parallèle**, puis
+   `OcrConsensus` choisit la réponse la plus représentative (voir Étape 9). Tous les coins et la Passe 1
+   sont traités **dans la même vague** — rien n'attend son tour.
 
-4. **Passe 2 : lecture en détail.** `PdfSupport` redessine **seulement ce rectangle**, mais en très
-   haute résolution (jusqu'à 3400 pixels de large), et l'envoie à Mistral avec la vraie question :
-   "recopie toutes les paires libellé/valeur."
+4. **Score : quel coin est le VRAI cartouche ?** Parmi tous les coins dont le résultat passe le
+   contrôle qualité (`CartouchePlausibility`, ≥ 3 paires, ≥ 3 paires « courtes » remplies), le
+   programme calcule un score (`CartoucheScore`, voir Étape 10) et garde celui qui a le **meilleur
+   score** — pas juste le premier trouvé. Si la Passe 1 est activée, son coin suggéré sert seulement à
+   départager les égalités de score.
 
-5. **Contrôle qualité.** `CartouchePlausibility` regarde le résultat : y a-t-il au moins 3 paires,
-   dont au moins 3 qui ressemblent à des codes courts avec une vraie valeur (pas une phrase, pas une
-   valeur vide) ? Si oui → c'est bon, on garde. Si non → on essaie un autre coin (repli), jusqu'à 4
-   essais.
+5. **Repli si rien ne passe.** Si aucun coin ne passe le contrôle qualité, le programme renvoie quand
+   même le coin le plus riche (le plus de paires trouvées), mais **marqué "à vérifier"** pour qu'un
+   humain le confirme — jamais perdu silencieusement. Ce n'est que si **tous** les coins reviennent
+   vides qu'on signale un vrai échec de localisation.
 
 6. **Résultat final.** Le chef d'orchestre renvoie un objet `CartoucheAnalysis` qui contient : la
-   liste des paires trouvées, le coin retenu, si le contrôle qualité a été validé, et combien
-   d'essais ont été nécessaires.
+   liste des paires trouvées, le coin retenu, si le contrôle qualité a été validé, et le nombre de
+   coins évalués (toujours 4, puisqu'ils sont maintenant tous essayés en parallèle plutôt qu'un par un).
 
 7. **Affichage (aujourd'hui) / réponse API (demain).** Aujourd'hui, `SmokeTestRunner` affiche ce
    résultat à l'écran pour vérification humaine. Demain, une API REST renverra ce même résultat sous
@@ -398,6 +529,9 @@ Suivons un document fictif `plan.pdf` (un très grand plan) du début à la fin 
 | 6 | Retester coûtait cher (rappeler Mistral à chaque fois) | Aucune mémoire des résultats déjà obtenus | Ajout d'un **cache** : une empreinte du contenu envoyé sert de "ticket" pour retrouver la réponse déjà connue |
 | 7 | Un document, très dense, restait bloqué (« je ne sais pas où chercher ») | La Passe 1 échouait souvent sur ce document précis, même si le contenu était lisible en zoomant | Le programme essaie maintenant les coins probables un par un, même quand la Passe 1 dit "je ne sais pas" |
 | 8 | Idée testée : donner à Mistral la liste des champs attendus | Objectif : l'aider à mieux repérer le cartouche | Testé, puis **abandonné** : ça faisait disparaître des champs réels absents de la liste d'indices — contraire au principe "tout recopier sans supposer" |
+| 9 | Deux questions identiques donnent parfois deux réponses différentes | Propriété du service Mistral (aucun réglage de reproductibilité disponible sur cet endpoint) | **Vote** : 5 échantillons en parallèle, on garde la réponse majoritaire au nombre de paires médian |
+| 10 | Un panneau d'intervenants (adresses, téléphones) accepté à tort comme cartouche | Le contrôle qualité ne regardait que la forme (lignes courtes remplies), pas le contenu | **Score de coin** : bonus aux codes d'identification, malus aux adresses/téléphones/rôles ; on garde le meilleur score |
+| 11 | Certains grands plans très denses mettaient plus d'une minute à se lire | Coins essayés un par un (temps additionnés) + Passe 1 = OCR complet du plan, l'appel le plus lent | **Une seule vague** (4 coins en parallèle) + Passe 1 désactivée par défaut (le score suffit) ; résolution/zone plus petites testées et **rejetées** (aucun gain, lecture dégradée) |
 
 ---
 
@@ -423,7 +557,13 @@ Suivons un document fictif `plan.pdf` (un très grand plan) du début à la fin 
 - **Non-déterminisme** : le fait qu'une intelligence artificielle puisse donner des réponses
   légèrement différentes si on lui pose exactement la même question deux fois. On l'a observé sur
   quelques documents très denses — ce n'est pas un bug de notre code, c'est une propriété du service
-  Mistral lui-même, à garder en tête pour la suite du projet.
+  Mistral lui-même (voir Étape 9). Le vote (consensus) est la façon dont on s'en protège.
+- **Consensus (vote)** : au lieu de poser une question une seule fois à l'IA, on la pose plusieurs
+  fois en parallèle et on garde la réponse la plus représentative, plutôt que de subir le hasard d'un
+  seul tirage (voir Étape 9, `OcrConsensus`).
+- **Score de coin** : une note calculée sur le contenu d'une extraction, pour départager plusieurs
+  zones qui semblent toutes valables au premier regard — favorise les codes d'identification courts,
+  pénalise les adresses et numéros de téléphone (voir Étape 10, `CartoucheScore`).
 
 ---
 
@@ -432,10 +572,14 @@ Suivons un document fictif `plan.pdf` (un très grand plan) du début à la fin 
 - Le moteur d'extraction sait lire correctement le cartouche sur **les 27 documents de test**
   (documents simples A4 et grands plans A0), sans jamais rater un document ni deviner à l'aveugle sa
   position.
-- **56 tests automatiques** vérifient que le code se comporte bien, sans appeler Mistral (gratuits et
+- Il est maintenant **robuste au non-déterminisme de Mistral** (vote sur 5 échantillons, Étape 9),
+  **capable de préférer la bonne zone parmi plusieurs plausibles** (score de coin, Étape 10), et
+  **rapide** : documents standards en 5 à 15 secondes, la plupart des grands plans en 13 à 25 secondes,
+  les plans A0 les plus denses autour de 26 à 28 secondes (Étape 11).
+- **102 tests automatiques** vérifient que le code se comporte bien, sans appeler Mistral (gratuits et
   rapides à relancer).
 - Tout le code est sur `main` (la version officielle et à jour du projet) sur GitHub.
 - La **classification** (décider, pour chaque paire lue, sur quel champ du formulaire eDoc elle
-  correspond) est terminée et testée. La prochaine étape (pas encore commencée) est la
-  **validation** : comparer chaque champ classé aux listes officielles eDoc — voir `instruction.md`
-  pour les règles déjà définies pour cette prochaine étape.
+  correspond) et la **validation** (comparer chaque champ classé aux listes officielles eDoc) sont
+  toutes les deux terminées et testées. La prochaine étape (pas encore commencée) est l'**API REST** —
+  voir `instruction.md` et `AGENT_CONTEXT.md` pour l'état détaillé.
