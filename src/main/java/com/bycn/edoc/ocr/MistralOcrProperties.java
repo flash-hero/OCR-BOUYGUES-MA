@@ -18,6 +18,14 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param cacheEnabled       active le cache de réponses adressé par contenu (évite de re-facturer un
  *                           appel déjà effectué à l'identique ; {@code true} par défaut)
  * @param cacheDir           répertoire du cache de réponses (relatif au répertoire de travail)
+ * @param samples            nombre d'échantillons par appel OCR (consensus). L'endpoint {@code /v1/ocr}
+ *                           n'a NI {@code temperature} NI {@code seed} : deux requêtes identiques peuvent
+ *                           différer. On échantillonne {@code samples} fois <em>en parallèle</em> et on
+ *                           retient un représentant robuste (voir {@link OcrConsensus}). 5 par défaut
+ *                           (mesuré : stabilise les annotations bimodales pour ~+5 s de queue de latence) ;
+ *                           1 désactive le consensus. Le résultat est figé dans le cache.
+ * @param maxRetries         nombre de nouvelles tentatives sur erreur transitoire (429/503, timeout réseau),
+ *                           avec back-off exponentiel. 2 par défaut.
  */
 @ConfigurationProperties(prefix = "mistral.ocr")
 public record MistralOcrProperties(
@@ -27,7 +35,9 @@ public record MistralOcrProperties(
         @DefaultValue("mistral-ocr-4-0") String model,
         @DefaultValue("8") int maxAnnotationPages,
         @DefaultValue("true") boolean cacheEnabled,
-        @DefaultValue(".ocr-cache") String cacheDir
+        @DefaultValue(".ocr-cache") String cacheDir,
+        @DefaultValue("5") int samples,
+        @DefaultValue("2") int maxRetries
 ) {
 
     public boolean hasApiKey() {

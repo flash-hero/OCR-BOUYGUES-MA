@@ -4,12 +4,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.io.ByteArrayOutputStream;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
@@ -49,24 +49,29 @@ class TwoPassCartoucheExtractorTest {
         // Arrange : grande page (grand côté ~1058 mm > seuil 430 mm).
         byte[] pdf = pageBytes(new PDRectangle(3000, 2000));
         MistralOcrClient client = mock(MistralOcrClient.class);
-        when(client.locateImage(any())).thenReturn(new CartoucheLocation(true, "bottom-right", null));
-        when(client.analyzeImage(any())).thenReturn(resultOf(
+        when(client.locateImageAsync(any()))
+                .thenReturn(CompletableFuture.completedFuture(new CartoucheLocation(true, "bottom-right", null)));
+        OcrResult rich = resultOf(
                 new CartoucheField("PROJET", "54B"),
                 new CartoucheField("EMETTEUR", "LACH"),
                 new CartoucheField("PHASE", "EXE"),
-                new CartoucheField("INDICE", "A")));
+                new CartoucheField("INDICE", "A"));
+        // Une seule vague : localisation ET les 4 coins (consensus chacun) en même temps.
+        when(client.analyzeImagesAsync(any()))
+                .thenReturn(CompletableFuture.completedFuture(List.of(rich, rich, rich, rich)));
         TwoPassCartoucheExtractor extractor = new TwoPassCartoucheExtractor(client);
 
         // Act
         CartoucheAnalysis analysis = extractor.extract(pdf);
 
-        // Assert : passe 1 (localisation) puis passe 2 (crop) qui passe le contrôle qualité.
+        // Assert : localisation + vague de coins concurrente ; le coin retenu passe le contrôle qualité.
         assertThat(analysis.mode()).isEqualTo(CartoucheAnalysis.Mode.TWO_PASS_CROP);
         assertThat(analysis.corner()).isEqualTo("bottom-right");
         assertThat(analysis.qualityPassed()).isTrue();
-        assertThat(analysis.attempts()).isEqualTo(1);
-        verify(client).locateImage(any());
-        verify(client).analyzeImage(any());
+        assertThat(analysis.attempts()).isEqualTo(4); // les 4 coins évalués en parallèle
+        verify(client).locateImageAsync(any());
+        verify(client).analyzeImagesAsync(any());
+        verify(client, never()).analyzeImage(any()); // pas de seconde vague de confirmation
     }
 
     @Test
@@ -74,17 +79,19 @@ class TwoPassCartoucheExtractorTest {
         // Localisation 'unknown' : on ne renonce pas tout de suite, on balaie les 4 coins prioritaires.
         byte[] pdf = pageBytes(new PDRectangle(3000, 2000));
         MistralOcrClient client = mock(MistralOcrClient.class);
-        when(client.locateImage(any())).thenReturn(new CartoucheLocation(false, "unknown", null));
-        // Aucun coin ne ressemble à un cartouche.
-        when(client.analyzeImage(any()))
-                .thenReturn(new OcrResult(null, null, new CartoucheExtraction(false, List.of())));
+        when(client.locateImageAsync(any()))
+                .thenReturn(CompletableFuture.completedFuture(new CartoucheLocation(false, "unknown", null)));
+        // Aucun des 4 coins (évalués en parallèle) ne renvoie quoi que ce soit.
+        OcrResult empty = new OcrResult(null, null, new CartoucheExtraction(false, List.of()));
+        when(client.analyzeImagesAsync(any()))
+                .thenReturn(CompletableFuture.completedFuture(List.of(empty, empty, empty, empty)));
         TwoPassCartoucheExtractor extractor = new TwoPassCartoucheExtractor(client);
 
         CartoucheAnalysis analysis = extractor.extract(pdf);
 
-        // Ce n'est qu'après échec des 4 coins qu'on signale le besoin de tuiles.
+        // Ce n'est que lorsque TOUS les coins sont vides qu'on signale le besoin de tuiles.
         assertThat(analysis.mode()).isEqualTo(CartoucheAnalysis.Mode.NEEDS_TILING);
-        verify(client, times(4)).analyzeImage(any());
+        verify(client).analyzeImagesAsync(any());
     }
 
     @Test
@@ -92,21 +99,60 @@ class TwoPassCartoucheExtractorTest {
         // Cas 21.pdf : la localisation pleine page échoue, mais l'extraction d'un coin recadré réussit.
         byte[] pdf = pageBytes(new PDRectangle(3000, 2000));
         MistralOcrClient client = mock(MistralOcrClient.class);
-        when(client.locateImage(any())).thenReturn(new CartoucheLocation(false, "unknown", null));
-        when(client.analyzeImage(any())).thenReturn(resultOf(
+        when(client.locateImageAsync(any()))
+                .thenReturn(CompletableFuture.completedFuture(new CartoucheLocation(false, "unknown", null)));
+        OcrResult rich = resultOf(
                 new CartoucheField("PROJET", "54B"),
                 new CartoucheField("EMETTEUR", "LACH"),
                 new CartoucheField("PHASE", "EXE"),
-                new CartoucheField("INDICE", "A")));
+                new CartoucheField("INDICE", "A"));
+        when(client.analyzeImagesAsync(any()))
+                .thenReturn(CompletableFuture.completedFuture(List.of(rich, rich, rich, rich)));
         TwoPassCartoucheExtractor extractor = new TwoPassCartoucheExtractor(client);
 
         CartoucheAnalysis analysis = extractor.extract(pdf);
 
-        // Malgré 'unknown', le balayage récupère le cartouche au premier coin prioritaire.
+        // Malgré 'unknown', la vague de coins récupère le cartouche au premier coin prioritaire.
         assertThat(analysis.mode()).isEqualTo(CartoucheAnalysis.Mode.TWO_PASS_CROP);
         assertThat(analysis.qualityPassed()).isTrue();
         assertThat(analysis.corner()).isEqualTo("bottom-right"); // premier de CORNER_PRIORITY
-        assertThat(analysis.attempts()).isEqualTo(1);
+        assertThat(analysis.attempts()).isEqualTo(4); // les 4 coins explorés
+    }
+
+    @Test
+    void among_passing_corners_the_real_cartouche_beats_the_intervenants_panel() throws Exception {
+        // Cas 20.pdf : deux coins passent le contrôle qualité — un panneau d'intervenants (adresses,
+        // téléphones) et le vrai cartouche (codes courts). Le score doit faire gagner le cartouche,
+        // même si le panneau est un coin de priorité SUPÉRIEURE (bottom-right).
+        byte[] pdf = pageBytes(new PDRectangle(3000, 2000));
+        MistralOcrClient client = mock(MistralOcrClient.class);
+        when(client.locateImageAsync(any()))
+                .thenReturn(CompletableFuture.completedFuture(new CartoucheLocation(false, "unknown", null)));
+
+        OcrResult intervenants = resultOf(
+                new CartoucheField("CONSTRUCTEUR", "BYG"),
+                new CartoucheField("2, rue Transversale", "92635 Gennevilliers"),
+                new CartoucheField("MAINTENEUR", "EXPRIMM"),
+                new CartoucheField("COORDONNATEUR SPS", "SOCOTEC"));
+        OcrResult cartouche = resultOf(
+                new CartoucheField("PHASE", "EXE"),
+                new CartoucheField("INDICE", "G"),
+                new CartoucheField("LOT", "003"),
+                new CartoucheField("N° DOC", "0114"));
+        OcrResult empty = new OcrResult(null, null, new CartoucheExtraction(false, List.of()));
+        // Vague alignée sur CORNER_PRIORITY = [bottom-right, bottom-left, top-right, top-left].
+        when(client.analyzeImagesAsync(any()))
+                .thenReturn(CompletableFuture.completedFuture(List.of(intervenants, cartouche, empty, empty)));
+        TwoPassCartoucheExtractor extractor = new TwoPassCartoucheExtractor(client);
+
+        CartoucheAnalysis analysis = extractor.extract(pdf);
+
+        // Le cartouche (bottom-left) l'emporte sur le panneau d'intervenants (bottom-right), pourtant prioritaire.
+        assertThat(analysis.mode()).isEqualTo(CartoucheAnalysis.Mode.TWO_PASS_CROP);
+        assertThat(analysis.qualityPassed()).isTrue();
+        assertThat(analysis.corner()).isEqualTo("bottom-left");
+        assertThat(analysis.extraction().fields()).extracting(CartoucheField::label)
+                .contains("PHASE", "INDICE");
     }
 
     private static byte[] pageBytes(PDRectangle size) throws Exception {

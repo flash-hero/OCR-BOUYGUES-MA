@@ -22,7 +22,7 @@ import java.util.List;
  * @param rawExtractionAnnotation JSON brut de l'annotation d'extraction (peut être nul)
  * @param rawLocationAnnotation   JSON brut de l'annotation de localisation, passe 1 (peut être nul)
  * @param qualityPassed           l'extraction retenue a passé le contrôle {@link CartouchePlausibility}
- * @param attempts                nombre de découpages essayés en passe 2 (1 = pas de repli)
+ * @param attempts                nombre de découpages évalués en passe 2 (tous en parallèle, pas séquentiels)
  */
 public record CartoucheAnalysis(
         Mode mode,

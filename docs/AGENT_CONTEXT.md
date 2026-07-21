@@ -19,19 +19,46 @@ Mistral OCR, pour préremplir automatiquement un formulaire de dépôt dans l'ap
 
 ## 2. État exact à la fin de cette session
 
-- **Branche** : `main`, dernier commit `5b3c969` (« feat: validation P4 par table de
-  référence »).
-- **Extraction (P2) et classification (P3) terminées et gelées** : voir historique
-  précédent, aucune régression depuis.
-- **Validation (P4) terminée et testée** : matching flou de la valeur classée contre la
-  table de référence CSV du projet (`src/main/resources/projects/{projectCode}/reference_tables/`),
-  règle D11 appliquée uniformément (aucun non-match n'est rejeté, toujours TO_REVIEW).
-  Un champ n'est validé QUE si un fichier CSV existe pour lui — l'absence de fichier
-  déclenche le pass-through, aucune liste de champs codée en dur nulle part.
-- **78 tests unitaires**, tous verts (56 existants + 22 nouveaux P4), aucun n'appelle le
-  réseau (`mvn test`).
+- **Branche** : `main`. Sessions précédentes : P4 validation (`5b3c969`), fix `.env` (`440f3a7`).
+  Cette session (2026-07-21) : **fiabilité + latence de l'extraction** (voir §2bis).
+- **Extraction (P2), classification (P3), validation (P4)** : terminées ; P2 retravaillée cette
+  session (voir §2bis), P3/P4 inchangées.
+- **102 tests unitaires**, tous verts, aucun n'appelle le réseau (`mvn test`).
 - **Prochaine étape non commencée** : P5 — API REST (exposer le pipeline complet
   upload → extraction → classification → validation → réponse JSON par champ).
+
+## 2bis. Session 2026-07-21 — consensus, score de coin, latence (l'extraction en une vague)
+
+Constats mesurés (corpus complet + docs lourds 11/12/16/20, caches vides) :
+- `/v1/ocr` n'a **ni `temperature` ni `seed`** (vérifié sur la référence API) : deux requêtes
+  identiques peuvent différer (12.pdf a basculé found true→false ; 15.pdf 77→19 paires).
+- La latence est dominée par le **temps d'OCR par appel**, qui croît avec le **volume de texte**
+  de l'image (pas ses pixels — Mistral redimensionne en interne). Un coin dense d'A0 ≈ 20-28 s/appel.
+- La passe 1 (localisation pleine page) OCRise TOUT le plan : c'était l'appel le plus lent (~40 %
+  du temps), et la sélection par score choisit le même coin sans elle.
+
+Ce qui a été construit (tout dans `ocr/`) :
+- **`OcrConsensus`** : N échantillons du même appel en parallèle, vote majoritaire sur
+  `cartoucheFound` + médiane basse du nombre de paires ; jamais de fusion/filtrage de paires.
+  `mistral.ocr.samples` = **5** (mesuré : stabilise 12.pdf pour ~+5 s de queue).
+- **`CartoucheScore`** : départage entre coins plausibles — favorise les codes courts
+  d'identification, pénalise adresses/téléphones/rôles d'intervenants (corrige 20.pdf qui
+  renvoyait le panneau des intervenants).
+- **Une seule vague réseau** par grand plan : rendus des 4 coins en parallèle (CPU), puis analyse
+  des 4 coins en même temps (consensus par coin, figé dans le cache). Passe 1 **désactivée par
+  défaut** (`mistral.ocr.locate-enabled=false`, réactivable sans code — elle ne fait que départager).
+- **Tolérance aux échantillons défaillants** : une annotation JSON tronquée = « pas d'extraction »
+  pour le vote, jamais un échec du document (crash 13.pdf corrigé). Retry back-off sur 429/503
+  (`mistral.ocr.max-retries=2`).
+- **Repli amélioré** : aucun coin validé → coin le plus riche renvoyé NON validé (`[A VERIFIER]`) ;
+  `NEEDS_TILING` seulement si TOUS les coins sont vides.
+- Leviers **rejetés sur mesure** : résolution 2400 px (aucun gain de temps, 16.pdf 13→29 paires) ;
+  fraction 0.28 (cartouche de 12.pdf coupé → tuiles). `crop-long-px=3400`, `corner-fraction=0.40`.
+
+Profil de latence livré : pages standard ~5-15 s ; grands plans ~13-25 s ; les 3 monstres A0
+(11/12/16) ~26-28 s — plancher d'un appel unique à pleine exactitude, descendre en dessous dégrade
+les lectures (mesuré). Objectif <20 s tenu partout sauf ces trois-là, choix assumé « exactitude
+d'abord ».
 
 ## 3. Principe architectural (invariant, ne pas dévier)
 

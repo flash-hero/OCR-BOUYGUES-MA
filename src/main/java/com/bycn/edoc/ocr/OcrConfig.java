@@ -49,9 +49,15 @@ public class OcrConfig {
     @Bean
     public TwoPassCartoucheExtractor twoPassCartoucheExtractor(
             MistralOcrClient client,
-            @Value("${edoc.force-corner:}") String forcedCorner) {
+            @Value("${edoc.force-corner:}") String forcedCorner,
+            @Value("${mistral.ocr.crop-long-px:3400}") int cropLongPx,
+            @Value("${mistral.ocr.locate-long-px:1400}") int locateLongPx,
+            @Value("${mistral.ocr.corner-fraction:0.40}") double cornerFraction,
+            @Value("${mistral.ocr.locate-enabled:false}") boolean locateEnabled) {
         // edoc.force-corner : diagnostic uniquement (vide par defaut). Force la zone de decoupage
         // sur les grands plans et court-circuite la passe 1, pour isoler mecanisme vs localisation.
-        return new TwoPassCartoucheExtractor(client, forcedCorner);
+        // Les quatre autres proprietes sont les leviers de latence des grands plans (voir yml).
+        return new TwoPassCartoucheExtractor(client, forcedCorner, cropLongPx, locateLongPx,
+                cornerFraction, locateEnabled);
     }
 }

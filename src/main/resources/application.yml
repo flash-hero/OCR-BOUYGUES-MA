@@ -19,6 +19,29 @@ mistral:
     # resolution changent (le corps de requete, donc la cle, change).
     cache-enabled: ${MISTRAL_OCR_CACHE_ENABLED:true}
     cache-dir: ${MISTRAL_OCR_CACHE_DIR:.ocr-cache}
+    # Consensus multi-echantillons : /v1/ocr n'a NI temperature NI seed, donc deux requetes
+    # identiques peuvent differer (12.pdf a bascule found true->false ; 15.pdf 77->19 paires). On
+    # echantillonne S fois le meme appel et on retient un representant robuste (vote majoritaire sur
+    # cartoucheFound, mediane du nombre de paires) SANS fusionner ni filtrer. 3 par defaut ; 1
+    # desactive le consensus (1 seul appel). Le choix est fige dans le cache : re-lancer ne recoute rien.
+    # 5 par defaut (mesure 2026-07-21) : les echantillons partent en parallele, donc ne coutent que la
+    # queue de latence (~+5 s sur les plans les plus lourds) et stabilisent les documents dont
+    # l'annotation est bimodale (12.pdf : 5 echantillons -> forme propre a 9 paires, 3 -> loterie).
+    samples: ${MISTRAL_OCR_SAMPLES:5}
+    # Nouvelles tentatives sur erreur transitoire (429 trop d'appels, 503, timeout) avec back-off.
+    max-retries: ${MISTRAL_OCR_MAX_RETRIES:2}
+    # --- Leviers de latence des grands plans (les changer invalide le cache : attendu) ---
+    # Resolution du decoupage de coin envoye a Mistral (grand cote, px).
+    crop-long-px: ${MISTRAL_OCR_CROP_LONG_PX:3400}
+    # Resolution du rendu pleine page de la passe 1 (localisation grossiere seulement).
+    locate-long-px: ${MISTRAL_OCR_LOCATE_LONG_PX:1400}
+    # Fraction de page prise depuis chaque coin (moins de surface = moins de texte a lire = appel plus court).
+    corner-fraction: ${MISTRAL_OCR_CORNER_FRACTION:0.40}
+    # Passe 1 (localisation pleine page). DESACTIVEE par defaut : mesure (2026-07-21, docs 11/12/16/20)
+    # — sur un plan dense c'est un OCR complet du plan, l'appel le plus lent de la vague (~40 % du
+    # temps), et la selection par score a choisi le MEME coin sur tous les docs testes sans elle.
+    # Reactivable sans toucher au code si un corpus futur la justifie.
+    locate-enabled: ${MISTRAL_OCR_LOCATE_ENABLED:false}
 
 edoc:
   samples-dir: data/samples

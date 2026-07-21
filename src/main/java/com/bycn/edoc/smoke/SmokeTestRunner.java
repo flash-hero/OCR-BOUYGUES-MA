@@ -3,6 +3,7 @@ package com.bycn.edoc.smoke;
 import com.bycn.edoc.ocr.CartoucheAnalysis;
 import com.bycn.edoc.ocr.CartoucheExtraction;
 import com.bycn.edoc.ocr.CartoucheField;
+import com.bycn.edoc.ocr.MistralOcrClient;
 import com.bycn.edoc.ocr.MistralOcrException;
 import com.bycn.edoc.ocr.MistralOcrProperties;
 import com.bycn.edoc.ocr.OcrResponseCache;
@@ -35,17 +36,20 @@ public class SmokeTestRunner implements CommandLineRunner {
     private static final String SEP = "--------------------------------------------------------";
 
     private final TwoPassCartoucheExtractor extractor;
+    private final MistralOcrClient client;
     private final MistralOcrProperties props;
     private final OcrResponseCache cache;
     private final ObjectMapper prettyMapper;
     private final Path samplesDir;
 
     public SmokeTestRunner(TwoPassCartoucheExtractor extractor,
+                           MistralOcrClient client,
                            MistralOcrProperties props,
                            OcrResponseCache cache,
                            ObjectMapper mapper,
                            @Value("${edoc.samples-dir:data/samples}") String samplesDir) {
         this.extractor = extractor;
+        this.client = client;
         this.props = props;
         this.cache = cache;
         this.prettyMapper = mapper.copy().enable(SerializationFeature.INDENT_OUTPUT);
@@ -57,6 +61,8 @@ public class SmokeTestRunner implements CommandLineRunner {
         System.out.println();
         System.out.println("=== Test décisif Mistral OCR — extraction générique de cartouche ===");
         System.out.println("Modèle épinglé    : " + props.model());
+        System.out.println("Échantillons/appel: " + props.samples()
+                + " (consensus ; /v1/ocr n'a ni seed ni temperature)");
         System.out.println("Dossier d'exemples: " + samplesDir.toAbsolutePath());
         System.out.println("Cache réponses    : " + (cache.isEnabled()
                 ? "actif (" + cache.directory().toAbsolutePath() + ") — un document déjà traité "
@@ -114,8 +120,10 @@ public class SmokeTestRunner implements CommandLineRunner {
                 + tiling + " a decouper en tuiles, " + lowConfidence + " a verifier ===");
         if (cache.isEnabled()) {
             System.out.println("Cache : " + cache.hits() + " reponse(s) servie(s) depuis le cache "
-                    + "(aucun cout API), " + cache.misses() + " appel(s) reseau.");
+                    + "(aucun cout API), " + cache.misses() + " requete(s) unique(s) manquante(s).");
         }
+        System.out.println("Appels reseau reels : " + client.networkCalls()
+                + " (chaque requete manquante = " + props.samples() + " echantillon(s)).");
         if (tiling > 0) {
             System.out.println("Note : " + tiling + " plan(s) dense(s) non localisable(s) en passe 1 "
                     + "(le redimensionnement est trop agressif meme pour une estimation grossiere). "
@@ -132,7 +140,7 @@ public class SmokeTestRunner implements CommandLineRunner {
             case SINGLE_PAGE -> System.out.println("Mode           : lecture pleine page (format standard)");
             case TWO_PASS_CROP -> {
                 System.out.println("Mode           : 2 passes (grand format) — zone retenue : "
-                        + analysis.corner() + "  (tentatives passe 2 : " + analysis.attempts() + ")");
+                        + analysis.corner() + "  (coins evalues en parallele : " + analysis.attempts() + ")");
                 if (!analysis.qualityPassed()) {
                     System.out.println("[A VERIFIER] Aucun coin n'a passe le controle qualite cartouche ; "
                             + "resultat le plus riche retenu, a valider par un humain.");
