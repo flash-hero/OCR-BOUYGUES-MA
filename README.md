@@ -228,6 +228,16 @@ de « la localisation est-elle correcte ? ». Vide en production.
 
 ## Fiabilité et latence de l'extraction (consensus, score de coin, vague unique)
 
+**Méthodologie.** Chaque décision de cette section vient d'une **mesure**, jamais d'une supposition :
+réglages rendus configurables, matrice de configurations testées **une variable à la fois** sur un
+panel fixe de 4 documents difficiles, cache vidé pour forcer un vrai appel, comparaison du temps **et**
+du contenu réel des paires extraites (pas seulement leur nombre), et un run isolé sur un document seul
+pour distinguer « trop d'appels à la suite » (throttling de lot) du coût réel d'un appel. Une première
+tentative (découpage en deux vagues réseau, exploration légère puis confirmation) a d'abord été
+adoptée sans cette mesure isolée ; elle s'est révélée, une fois mesurée, deux fois plus lente et moins
+fiable — reprise ci-dessous sous sa forme corrigée. Détail complet, y compris les leviers testés et
+rejetés (résolution réduite, zone de coin réduite), dans `docs/AGENT_CONTEXT.md` §2bis/§2ter.
+
 Constat vérifié sur la référence API Mistral : l'endpoint `/v1/ocr` n'expose **ni `temperature`, ni
 `seed`, ni `random_seed`** — deux requêtes strictement identiques peuvent renvoyer des résultats
 différents (mesuré : `12.pdf` a basculé `cartoucheFound` true→false d'un run à l'autre ; `15.pdf`

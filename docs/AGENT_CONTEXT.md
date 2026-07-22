@@ -60,6 +60,53 @@ Profil de latence livré : pages standard ~5-15 s ; grands plans ~13-25 s ; les 
 les lectures (mesuré). Objectif <20 s tenu partout sauf ces trois-là, choix assumé « exactitude
 d'abord ».
 
+## 2ter. Méthodologie appliquée cette session — mesurer, jamais supposer
+
+Le travail ci-dessus (§2bis) s'est fait en **deux temps**, avec un changement net de méthode entre les
+deux — à connaître pour ne pas répéter la première approche dans une future session.
+
+**Premier temps (conception raisonnée, non mesurée).** Consensus + score de coin + parallélisation ont
+d'abord été construits par analyse (le raisonnement tenait, les tests unitaires passaient), puis un
+découpage en deux vagues réseau (« exploration légère » puis « confirmation ») a été ajouté en
+supposant qu'échantillonner plus légèrement les 4 coins réduirait la rafale d'appels simultanés et
+donc la latence. **Ce découpage n'a jamais été mesuré isolément avant d'être intégré** — seulement
+validé par les tests unitaires (qui ne mesurent pas de temps réel). Un run complet sur le corpus a
+ensuite révélé, après coup, qu'il **doublait** la latence isolée (2 vagues séquentielles au lieu
+d'une) et **dégradait** la sélection de coin (échantillonnage à 1 sur l'exploration = vote plus
+fragile, régressions sur `12.pdf`/`19.pdf`). Coûteux à découvrir a posteriori.
+
+**Second temps (mandat explicite de l'utilisateur, effort maximal) : mesurer avant d'adopter.** Suite
+à l'instruction « tu décides, ne me demande rien, dépense les appels API nécessaires, livre » :
+1. Le découpage en deux vagues a été **annulé** (retour à une vague unique, coins + localisation
+   lancés ensemble), une fois son coût réel mesuré.
+2. Les leviers de latence (résolution du découpage, fraction de coin, activation de la passe 1) ont
+   été rendus **configurables** (`mistral.ocr.*`) au lieu d'être des constantes — condition préalable
+   pour pouvoir les tester sans recompiler à chaque essai.
+3. **Matrice de mesure** : un panel fixe de 4 documents difficiles (`11.pdf`, `12.pdf`, `16.pdf`,
+   `20.pdf`), cache vidé avant chaque variante pour forcer de vrais appels, **une seule variable
+   changée à la fois** — R1 (référence), R2 (passe 1 désactivée), R3 (+ résolution 2400 px), R4
+   (+ fraction de coin 0.28), R5 (+ 5 échantillons de consensus).
+4. Pour chaque variante, comparaison **du temps ET du contenu réel des paires extraites** (pas
+   seulement leur nombre) contre R1 — c'est cette comparaison de contenu qui a révélé que R3
+   dégradait la lecture de `16.pdf` (13→29 paires confuses) et que R4 coupait le cartouche de
+   `12.pdf`, alors que le temps mesuré seul n'aurait rien montré d'anormal.
+5. **Isoler un document seul** (`11.pdf` sans aucun autre traitement en parallèle) pour trancher une
+   question précise : le temps mesuré sur le corpus complet est-il dû au *nombre* d'appels qui se
+   bousculent (throttling de lot) ou au *coût par appel* lui-même ? Résultat : même isolé, `11.pdf`
+   restait lent (~77 s pour seulement 10 appels) — ce n'était donc pas du throttling, mais bien le
+   temps d'OCR par appel sur une image dense. Sans ce test isolé, la conclusion serait restée fausse.
+6. Décision prise **uniquement sur les chiffres** : R2 (passe 1 off) adopté (même coin choisi, ~40 %
+   plus rapide) ; R3 et R4 **rejetés** et documentés comme tels (pas juste abandonnés silencieusement,
+   voir §2bis) ; R5 (samples=5) adopté (corrige la loterie de consensus sur `12.pdf` pour un coût de
+   queue négligeable, les échantillons étant parallèles).
+7. **Run complet du corpus (27 documents, cache vidé) comme dernière porte avant le commit** — pas un
+   run exploratoire de plus, la validation finale de tout ce qui a été mesuré et décidé ci-dessus.
+
+**À retenir pour la suite** (voir aussi la nouvelle règle dans `CLAUDE.md`) : toute future
+optimisation de latence ou de résolution/zone doit suivre ce protocole — configurable, matrice à une
+variable, comparaison de contenu (pas seulement de temps), test isolé avant d'accuser un lot, et
+leviers rejetés documentés au même titre que les leviers adoptés.
+
 ## 3. Principe architectural (invariant, ne pas dévier)
 
 Deux étapes strictement séparées :

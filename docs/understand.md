@@ -302,7 +302,18 @@ même si on ne lui demande qu'une réponse grossière ("quel coin ?"). En mesura
 qu'elle représentait à elle seule près de la moitié du temps total, pour un rôle qui n'est, au fond,
 que de **départager** entre plusieurs coins quand le score (Étape 10) hésite.
 
-**Ce qu'on a changé :**
+**Un premier essai, séduisant sur le papier, s'est révélé une fausse bonne idée une fois vraiment
+mesuré.** Une première tentative pour aller plus vite : demander une lecture rapide et légère à
+chacun des 4 coins pour deviner rapidement lequel est le bon, puis ne relire en profondeur QUE ce
+coin gagnant. Ça semblait logique — moins de lectures profondes, donc plus rapide. Mais on ne
+l'avait validé qu'avec les tests automatiques (qui vérifient le comportement, pas le temps réel). En
+chronométrant pour de vrai sur un document isolé, on a découvert que ça **doublait** le temps au lieu
+de le réduire (deux allers-retours l'un après l'autre valent plus cher qu'un seul), et que la lecture
+rapide de chaque coin était trop fragile pour bien choisir (deux documents ont vu leur qualité se
+dégrader). **On est revenu en arrière**, et surtout on a changé de méthode de travail : à partir de
+là, plus aucun réglage n'a été adopté sans être d'abord mesuré, chiffres à l'appui.
+
+**Ce qu'on a changé (validé par la mesure, pas par déduction) :**
 1. **Une seule vague au lieu de plusieurs.** Avant, le programme essayait un coin, attendait la
    réponse, puis essayait le suivant si besoin — les temps s'additionnaient. Maintenant, les **quatre
    coins candidats sont envoyés à Mistral en même temps** (en parallèle), comme si on envoyait quatre
@@ -312,13 +323,18 @@ que de **départager** entre plusieurs coins quand le score (Étape 10) hésite.
    documents essayés, on l'a désactivée par défaut — ça évite de payer son coût (le plus lent) pour un
    rôle de simple appoint. Elle reste réactivable par un réglage, sans toucher au code, si un jour ça
    s'avère utile sur d'autres documents.
-3. **Deux idées essayées, puis abandonnées (mesurées, pas supposées).** On a testé si envoyer une image
-   plus petite à Mistral irait plus vite : mesuré que **non**, et en plus ça a dégradé la lecture d'un
-   document (13 paires bien lues devenues 29 paires confuses). On a aussi testé si découper une zone
-   plus petite autour du coin irait plus vite : mesuré que ça **coupait carrément le cartouche** sur un
-   autre document. Les deux idées ont été annulées — exactement comme à l'Étape 8, on teste, on
+3. **Une petite expérience contrôlée, pas des essais au hasard.** Pour tester deux nouvelles idées, on
+   a d'abord transformé des valeurs codées en dur en **réglages ajustables**, puis on a choisi un
+   **groupe fixe de 4 documents difficiles**, changé **un seul réglage à la fois**, et vidé la mémoire
+   (cache) avant chaque essai pour forcer une vraie nouvelle lecture (pas une réponse déjà connue).
+   Surtout : on n'a pas comparé que le chronomètre, on a aussi relu **le contenu réel** des paires
+   trouvées à chaque essai. C'est cette relecture du contenu — pas le temps seul — qui a révélé
+   qu'une image plus petite rendait un document plus confus (13 paires bien lues devenues 29 paires
+   confuses) et qu'une zone de coin plus petite coupait carrément le cartouche d'un autre document. Les
+   deux idées ont été annulées, en **notant explicitement pourquoi** — comme à l'Étape 8, on teste, on
    mesure, et si ça ne marche pas vraiment, on revient en arrière plutôt que de garder une fausse bonne
-   idée.
+   idée. Mais cette fois, on garde aussi une trace écrite de ce qui a été essayé et rejeté, pour ne pas
+   perdre de temps à retester la même chose dans une future session.
 4. **Un échantillon raté ne fait plus planter tout le document.** Il arrive qu'un des 5 échantillons du
    vote (Étape 9) revienne avec une réponse coupée en plein milieu (illisible). Avant, ça faisait
    planter tout le document avec une erreur. Maintenant, cet échantillon raté compte juste comme "rien
@@ -331,6 +347,13 @@ grands plans en 13 à 25 secondes. Les trois plans A0 les plus denses et les plu
 restent autour de 26 à 28 secondes — c'est le temps d'**un seul** appel Mistral à pleine qualité sur ce
 genre de document ; descendre en dessous, on l'a mesuré deux fois, dégrade la lecture plutôt que de
 la rendre plus rapide.
+
+> **Note de méthode.** À partir de cette étape, une règle simple s'applique à tout futur changement
+> de vitesse ou de qualité de lecture : **on ne suppose jamais, on mesure toujours** — sur un document
+> isolé (pour ne pas confondre "trop d'appels à la suite" et "un appel qui prend vraiment du temps"),
+> une seule variable changée à la fois, en comparant le contenu réel trouvé et pas seulement le
+> chronomètre. Un réglage qui n'a pas été mesuré n'est jamais adopté par défaut ; un réglage mesuré et
+> rejeté est noté comme tel, pas juste oublié.
 
 ---
 
