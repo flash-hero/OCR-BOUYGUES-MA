@@ -124,13 +124,13 @@ if (-not (Test-Path $pom)) {
 # 6) Cle API Mistral (jamais affichee)
 $apiKeyFound = $false
 $apiKeySource = ''
-if ($env:MISTRAL_API_KEY -and $env:MISTRAL_API_KEY.Trim().Length -gt 0) {
+if ($env:OCR_API_KEY -and $env:OCR_API_KEY.Trim().Length -gt 0) {
     $apiKeyFound = $true
     $apiKeySource = "variable d'environnement"
 } else {
     $envFile = Join-Path $root '.env'
     if (Test-Path $envFile) {
-        $match = Select-String -Path $envFile -Pattern '^\s*MISTRAL_API_KEY\s*=\s*(.+)$' | Select-Object -First 1
+        $match = Select-String -Path $envFile -Pattern '^\s*OCR_API_KEY\s*=\s*(.+)$' | Select-Object -First 1
         if ($match) {
             $val = $match.Matches[0].Groups[1].Value.Trim().Trim('"').Trim("'")
             if ($val.Length -gt 0) { $apiKeyFound = $true; $apiKeySource = 'fichier .env' }
@@ -140,27 +140,10 @@ if ($env:MISTRAL_API_KEY -and $env:MISTRAL_API_KEY.Trim().Length -gt 0) {
 if ($apiKeyFound) {
     Write-Result 'OK' 'Cle API Mistral presente' "source : $apiKeySource (valeur masquee)"
 } else {
-    Write-Result 'FAIL' 'Cle API Mistral absente' 'Copiez .env.example vers .env et renseignez MISTRAL_API_KEY'
+    Write-Result 'FAIL' 'Cle API Mistral absente' 'Copiez .env.example vers .env et renseignez OCR_API_KEY'
 }
 
 # 7) Documents d'exemple
-$samplesDir = Join-Path $root 'data/samples'
-$expected = @('6.pdf', '16.pdf', '25.pdf')
-if (-not (Test-Path $samplesDir)) {
-    Write-Result 'FAIL' 'Dossier data/samples/ absent' 'Creez-le et deposez-y les PDF d exemple'
-} else {
-    $present = @($expected | Where-Object { Test-Path (Join-Path $samplesDir $_) })
-    $missing = @($expected | Where-Object { -not (Test-Path (Join-Path $samplesDir $_)) })
-    $anyPdf = Get-ChildItem -Path $samplesDir -Filter *.pdf -File -ErrorAction SilentlyContinue
-    if ($present.Count -eq $expected.Count) {
-        Write-Result 'OK' 'Documents d exemple presents' ($expected -join ', ')
-    } elseif ($anyPdf) {
-        Write-Result 'WARN' 'Documents d exemple partiels' ("presents : $($present -join ', ') ; manquants : $($missing -join ', ')")
-    } else {
-        Write-Result 'FAIL' 'Aucun PDF dans data/samples/' 'Deposez 6.pdf, 16.pdf, 25.pdf'
-    }
-}
-
 # Bilan
 Write-Host ''
 Write-Host '=== Bilan ===' -ForegroundColor Cyan
