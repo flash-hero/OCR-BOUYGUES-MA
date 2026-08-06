@@ -17,10 +17,10 @@ import org.springframework.core.env.StandardEnvironment;
 
 /**
  * Charge les variables d'un fichier {@code .env} (à la racine du projet) dans l'environnement Spring,
- * <b>avec une priorité inférieure</b> aux vraies variables d'environnement : si {@code MISTRAL_API_KEY}
+ * <b>avec une priorité inférieure</b> aux vraies variables d'environnement : si {@code OCR_API_KEY}
  * est déjà défini dans le système, il l'emporte sur le {@code .env}.
  *
- * <p>Permet d'écrire {@code ${MISTRAL_API_KEY}} dans application.yml sans dépendance externe.
+ * <p>Permet d'écrire {@code ${OCR_API_KEY}} dans application.yml sans dépendance externe.
  * Le fichier {@code .env} est optionnel : son absence n'est pas une erreur (c'est {@code check_setup}
  * qui diagnostique l'absence de clé).</p>
  *
