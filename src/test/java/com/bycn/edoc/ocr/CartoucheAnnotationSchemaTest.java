@@ -40,4 +40,49 @@ class CartoucheAnnotationSchemaTest {
         assertThat(fmt.path("json_schema").path("strict").asBoolean()).isTrue();
         assertThat(fmt.path("json_schema").path("schema").path("type").asText()).isEqualTo("object");
     }
+
+    @Test
+    void with_targets_the_schema_adds_assignments_constrained_to_the_requested_names() {
+        var targets = java.util.List.of(
+                new ReadTarget("numero", java.util.List.of("Numéro", "N°")),
+                new ReadTarget("phase", java.util.List.of("Phase")));
+
+        JsonNode schema = CartoucheAnnotationSchema.schema(mapper, targets);
+
+        JsonNode assignments = schema.path("properties").path("assignments");
+        assertThat(assignments.path("type").asText()).isEqualTo("array");
+        JsonNode item = assignments.path("items");
+        assertThat(item.path("properties").has("field")).isTrue();
+        assertThat(item.path("properties").has("label")).isTrue();
+        assertThat(item.path("properties").has("value")).isTrue();
+
+        // Liste fermée : le modèle ne peut pas inventer un nom de champ.
+        java.util.List<String> names = new java.util.ArrayList<>();
+        item.path("properties").path("field").path("enum").forEach(n -> names.add(n.asText()));
+        assertThat(names).containsExactly("numero", "phase");
+
+        // Et le contrat générique ne bouge pas : fields reste la lecture complète, non filtrée.
+        assertThat(schema.path("properties").has("fields")).isTrue();
+    }
+
+    @Test
+    void without_targets_neither_schema_nor_prompt_mention_assignments() {
+        JsonNode schema = CartoucheAnnotationSchema.schema(mapper);
+        assertThat(schema.path("properties").has("assignments")).isFalse();
+        assertThat(CartoucheAnnotationSchema.promptFor(java.util.List.of()))
+                .isEqualTo(CartoucheAnnotationSchema.PROMPT);
+    }
+
+    @Test
+    void with_targets_the_prompt_lists_each_field_with_its_expected_labels() {
+        var targets = java.util.List.of(new ReadTarget("numero", java.util.List.of("Numéro", "N°")));
+
+        String prompt = CartoucheAnnotationSchema.promptFor(targets);
+
+        assertThat(prompt).startsWith(CartoucheAnnotationSchema.PROMPT);
+        assertThat(prompt).contains("assignments");
+        assertThat(prompt).contains("- numero (libellés possibles : Numéro, N°)");
+        // La garde est annoncée au modèle : jamais une valeur absente de fields.
+        assertThat(prompt).contains("ne figure pas dans fields");
+    }
 }
