@@ -46,4 +46,37 @@ class CropRegionTest {
         assertThat(CropRegion.forCorner("unknown", F, B).isFullPage()).isTrue();
         assertThat(CropRegion.forCorner(null, F, B).isFullPage()).isTrue();
     }
+
+    @Test
+    void from_box_builds_the_rectangle_and_clamps_out_of_range_edges() {
+        CropRegion r = CropRegion.fromBox(0.60, 0.70, 1.20, 0.95, 0.02);
+        assertThat(r.x()).isCloseTo(0.60, within(1e-9));
+        assertThat(r.y()).isCloseTo(0.70, within(1e-9));
+        assertThat(r.w()).isCloseTo(0.40, within(1e-9)); // droite serrée à 1.0
+        assertThat(r.h()).isCloseTo(0.25, within(1e-9));
+    }
+
+    @Test
+    void from_box_rejects_degenerate_boxes() {
+        // Bords inversés, ou boîte de quelques pourcents : localisation ratée, pas un découpage.
+        assertThat(CropRegion.fromBox(0.8, 0.8, 0.4, 0.9, 0.02)).isNull();
+        assertThat(CropRegion.fromBox(0.50, 0.50, 0.505, 0.90, 0.02)).isNull();
+    }
+
+    @Test
+    void expanded_adds_a_margin_on_each_side_and_stays_inside_the_page() {
+        CropRegion r = new CropRegion(0.90, 0.10, 0.08, 0.20).expanded(0.05);
+        assertThat(r.x()).isCloseTo(0.85, within(1e-9));
+        assertThat(r.y()).isCloseTo(0.05, within(1e-9));
+        assertThat(r.x() + r.w()).isCloseTo(1.0, within(1e-9)); // serré au bord droit
+        assertThat(r.h()).isCloseTo(0.30, within(1e-9));
+    }
+
+    @Test
+    void zone_label_names_the_grid_cell_of_the_rectangle_center() {
+        assertThat(new CropRegion(0.75, 0.75, 0.2, 0.2).zoneLabel()).isEqualTo("bottom-right");
+        assertThat(new CropRegion(0.0, 0.0, 0.2, 0.2).zoneLabel()).isEqualTo("top-left");
+        assertThat(new CropRegion(0.9, 0.4, 0.1, 0.2).zoneLabel()).isEqualTo("right");
+        assertThat(new CropRegion(0.4, 0.45, 0.2, 0.1).zoneLabel()).isEqualTo("center");
+    }
 }
