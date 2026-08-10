@@ -10,7 +10,6 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  * et le test décisif d'extraction générique de cartouche. Aucune API REST, aucune
  * classification/validation, aucun Tesseract à ce stade.</p>
  *
- * <p>Le test décisif se lance via le profil {@code smoke} (voir {@code run_smoke.ps1}).</p>
  */
 @SpringBootApplication
 public class EdocOcrApplication {
