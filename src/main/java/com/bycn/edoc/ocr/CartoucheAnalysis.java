@@ -8,6 +8,7 @@ import java.util.List;
  * décrit le chemin suivi et l'extraction obtenue.
  *
  * <ul>
+ *   <li>{@link Mode#TEXT_LAYER} — voie principale : le texte du PDF, lu localement puis analysé.</li>
  *   <li>{@link Mode#SINGLE_PAGE} — format standard (A4/A3) : lecture pleine page directe.</li>
  *   <li>{@link Mode#TWO_PASS_CROP} — grand plan : passe 1 (localisation) + passe 2 (extraction sur
  *       le découpage plein résolution du coin), avec repli sur les autres coins si le contrôle
@@ -33,7 +34,15 @@ public record CartoucheAnalysis(
         boolean qualityPassed,
         int attempts) {
 
-    public enum Mode { SINGLE_PAGE, TWO_PASS_CROP, NEEDS_TILING }
+    public enum Mode { TEXT_LAYER, SINGLE_PAGE, TWO_PASS_CROP, NEEDS_TILING }
+
+    /**
+     * Lecture de la couche texte du PDF : aucune image envoyée, aucune transcription — le texte
+     * vient du fichier lui-même, exact. Voir {@link PdfTextLayer}.
+     */
+    public static CartoucheAnalysis textLayer(CartoucheExtraction extraction, JsonNode rawExtraction) {
+        return new CartoucheAnalysis(Mode.TEXT_LAYER, null, extraction, rawExtraction, null, true, 1);
+    }
 
     public static CartoucheAnalysis singlePage(CartoucheExtraction extraction, JsonNode rawExtraction) {
         return new CartoucheAnalysis(Mode.SINGLE_PAGE, null, extraction, rawExtraction, null, true, 1);
