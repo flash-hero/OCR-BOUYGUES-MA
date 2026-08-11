@@ -211,4 +211,56 @@ class FieldValidatorTest {
         assertThat(phase.status()).isEqualTo(FieldStatus.TO_REVIEW);
         assertThat(phase.matchedReferenceCode()).isNull();
     }
+
+    // --- Chemin generique : tables fournies par l'appelant (valeurs Documentum) ---------------
+
+    @Test
+    void a_caller_supplied_table_auto_validates_exactly_like_a_csv_one() {
+        // Cas eDoc reel : les valeurs officielles viennent de Documentum, pas d'un CSV du classpath.
+        ReferenceTableSource tables = field -> "spec_char1".equals(field)
+                ? List.of(new ReferenceEntry("EXE", "Execution"), new ReferenceEntry("DOE", "Dossier"))
+                : List.of();
+
+        ValidationResult result = validator()
+                .validate(input(classified("spec_char1", "Phase", "EXE")), tables);
+
+        ValidatedField phase = fieldNamed(result, "spec_char1");
+        assertThat(phase.status()).isEqualTo(FieldStatus.AUTO_VALIDATED);
+        assertThat(phase.matchedReferenceCode()).isEqualTo("EXE");
+        assertThat(phase.matchedReferenceLabel()).isEqualTo("Execution");
+    }
+
+    @Test
+    void rule_d11_holds_on_caller_supplied_tables_too() {
+        // Valeur absente de la table fournie : jamais un rejet, toujours TO_REVIEW.
+        ReferenceTableSource tables = field -> List.of(new ReferenceEntry("EXE", "Execution"));
+
+        ValidationResult result = validator()
+                .validate(input(classified("spec_char1", "Phase", "ZZZ")), tables);
+
+        ValidatedField phase = fieldNamed(result, "spec_char1");
+        assertThat(phase.status()).isEqualTo(FieldStatus.TO_REVIEW);
+        assertThat(phase.value()).isEqualTo("ZZZ");
+        assertThat(phase.matchedReferenceCode()).isNull();
+    }
+
+    @Test
+    void a_field_without_any_caller_supplied_table_is_carried_over_untouched() {
+        // Un champ libre (pas de refTable cote eDoc) : rien a valider, jamais "valide par defaut".
+        ValidationResult result = validator()
+                .validate(input(classified("spec_char2", "Texte", "n'importe quoi")), field -> List.of());
+
+        ValidatedField libre = fieldNamed(result, "spec_char2");
+        assertThat(libre.status()).isEqualTo(FieldStatus.TO_REVIEW);
+        assertThat(libre.matchedReferenceCode()).isNull();
+    }
+
+    @Test
+    void a_null_table_from_the_caller_is_treated_as_no_table_not_a_crash() {
+        // Robustesse : une source qui renvoie null ne doit pas faire echouer la validation.
+        ValidationResult result = validator()
+                .validate(input(classified("spec_char3", "Lot", "03")), field -> null);
+
+        assertThat(fieldNamed(result, "spec_char3").status()).isEqualTo(FieldStatus.TO_REVIEW);
+    }
 }
