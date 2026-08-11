@@ -31,24 +31,36 @@ public class FieldValidator {
     }
 
     /**
-     * @param projectCode projet eDoc fourni par l'appel API : détermine quelles tables s'appliquent
+     * @param projectCode projet eDoc fourni par l'appel API : détermine quelles tables s'appliquent.
+     *                    Les tables sont lues dans {@link ReferenceTableRegistry} (CSV du classpath).
      */
     public ValidationResult validate(ClassificationResult classification, String projectCode) {
+        return validate(classification, targetField -> registry.getTable(projectCode, targetField));
+    }
+
+    /**
+     * Variante où l'appelant fournit lui-même les tables (voir {@link ReferenceTableSource}) :
+     * indispensable pour un projet eDoc, dont les valeurs officielles viennent de Documentum et
+     * non des CSV embarqués. La logique de validation est strictement la même dans les deux cas,
+     * règle D11 comprise.
+     */
+    public ValidationResult validate(ClassificationResult classification, ReferenceTableSource tables) {
         Objects.requireNonNull(classification, "classification");
+        Objects.requireNonNull(tables, "tables");
         List<ValidatedField> validated = new ArrayList<>(classification.fields().size());
         for (ClassifiedField field : classification.fields()) {
-            validated.add(validateOne(field, projectCode));
+            validated.add(validateOne(field, tables));
         }
         // unclassifiedPairs traverse P4 sans lecture ni modification : ce ne sont pas des champs.
         return new ValidationResult(validated, classification.unclassifiedPairs());
     }
 
-    private ValidatedField validateOne(ClassifiedField field, String projectCode) {
+    private ValidatedField validateOne(ClassifiedField field, ReferenceTableSource tables) {
         if (field.status() == FieldStatus.MISSING) {
             return ValidatedField.carriedOver(field);   // aucune valeur lue : rien à valider
         }
-        List<ReferenceEntry> table = registry.getTable(projectCode, field.targetField());
-        if (table.isEmpty()) {
+        List<ReferenceEntry> table = tables.tableFor(field.targetField());
+        if (table == null || table.isEmpty()) {
             return ValidatedField.carriedOver(field);   // pas de table = rien à valider, jamais « valide par défaut »
         }
         Match best = bestMatch(field.value(), table);
