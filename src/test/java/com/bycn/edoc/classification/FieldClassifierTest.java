@@ -35,6 +35,31 @@ class FieldClassifierTest {
     }
 
     @Test
+    void an_empty_header_of_the_same_name_never_beats_the_filled_pair_below_it() {
+        // Cas 20.pdf : la zone lue contient l'en-tete vide du tableau de revisions (« DATE » sans
+        // valeur, place plus haut) ET la vraie date du cartouche. Les deux libelles matchent aussi
+        // bien ; c'est la valeur renseignee qui doit l'emporter, pas l'ordre de lecture.
+        ClassificationResult result = classifier(DEFAULT_THRESHOLD, false).classifyTargets(
+                extraction(f("DATE", ""), f("DATE", "13/07/2012")),
+                List.of(new TargetField("DATE", List.of("DATE"))));
+
+        assertThat(fieldNamed(result, "DATE").value()).isEqualTo("13/07/2012");
+    }
+
+    @Test
+    void a_field_whose_only_candidate_is_empty_still_returns_that_pair() {
+        // Le departage ne doit jamais faire disparaitre une paire : sans concurrente renseignee,
+        // l'en-tete vide reste ce qu'on a lu (charge a l'humain de trancher).
+        ClassificationResult result = classifier(DEFAULT_THRESHOLD, false).classifyTargets(
+                extraction(f("DATE", "")),
+                List.of(new TargetField("DATE", List.of("DATE"))));
+
+        ClassifiedField date = fieldNamed(result, "DATE");
+        assertThat(date.status()).isEqualTo(FieldStatus.TO_REVIEW);
+        assertThat(date.value()).isEmpty();
+    }
+
+    @Test
     void confirmed_synonym_matches_its_target_field() {
         ClassificationResult result = classifier(DEFAULT_THRESHOLD, false)
                 .classify(extraction(f("N° GED", "GED-001")), List.of("NUMERO"));
@@ -123,7 +148,7 @@ class FieldClassifierTest {
 
     @Test
     void pair_matching_no_target_field_stays_in_unclassified_pairs() {
-        // « Affaire » est réellement lu sur 16.pdf (smoke test) : hors périmètre, jamais supprimé.
+        // « Affaire » est réellement lu sur de vrais plans : hors périmètre, jamais supprimé.
         ClassificationResult result = classifier(DEFAULT_THRESHOLD, false)
                 .classify(extraction(f("Affaire", "54B"), f("Phase", "EXE")), List.of("PHASE"));
 
@@ -220,5 +245,102 @@ class FieldClassifierTest {
                         List.of("PHASE", "NUMERO"));
 
         assertThat(result.fields()).noneMatch(c -> c.status() == FieldStatus.AUTO_VALIDATED);
+    }
+
+    // --- Chemin generique : synonymes fournis par l'appelant (projet eDoc) --------------------
+
+    @Test
+    void caller_supplied_labels_classify_a_field_absent_from_the_yaml() {
+        // Cas eDoc reel : le champ s'appelle "spec_char1" (nom technique du projet, introuvable
+        // dans schema_fields.yaml) et ses seuls libelles connus sont ceux configures dans eDoc.
+        // Le chemin historique le classerait MISSING ; le chemin generique doit le remplir.
+        ClassificationResult result = classifier(DEFAULT_THRESHOLD, false)
+                .classifyTargets(extraction(f("Bâtiment", "BtA")),
+                        List.of(new TargetField("spec_char1", List.of("Bâtiment", "Bat"))));
+
+        ClassifiedField batiment = fieldNamed(result, "spec_char1");
+        assertThat(batiment.status()).isEqualTo(FieldStatus.TO_REVIEW);
+        assertThat(batiment.value()).isEqualTo("BtA");
+        assertThat(batiment.rawLabel()).isEqualTo("Bâtiment");
+    }
+
+    @Test
+    void caller_supplied_labels_stay_fuzzy_and_tolerate_case_and_accents() {
+        // Meme garde-fou que pour le yaml : le cartouche imprime "BATIMENT", eDoc configure
+        // "Bâtiment". Une egalite stricte renverrait un faux MISSING.
+        ClassificationResult result = classifier(DEFAULT_THRESHOLD, false)
+                .classifyTargets(extraction(f("BATIMENT", "BtA")),
+                        List.of(new TargetField("spec_char1", List.of("Bâtiment"))));
+
+        assertThat(fieldNamed(result, "spec_char1").status()).isEqualTo(FieldStatus.TO_REVIEW);
+    }
+
+    @Test
+    void a_target_without_any_label_is_missing_never_an_error() {
+        // eDoc peut fournir un champ sans libelle exploitable : cela doit degrader proprement.
+        ClassificationResult result = classifier(DEFAULT_THRESHOLD, false)
+                .classifyTargets(extraction(f("Phase", "EXE")),
+                        List.of(new TargetField("spec_char9", List.of())));
+
+        assertThat(fieldNamed(result, "spec_char9").status()).isEqualTo(FieldStatus.MISSING);
+        assertThat(result.unclassifiedPairs()).containsExactly(f("Phase", "EXE"));
+    }
+
+    @Test
+    void compound_printed_labels_containing_the_expected_word_still_match() {
+        // Cartouches reels : le libelle attendu est imprime AVEC d'autres mots. La chaine entiere
+        // s'effondre (ratio("numero de document","numero") = 50) alors que le mot est la, mot pour
+        // mot : c'est la comparaison par ensembles de mots qui rattrape ces libelles composes.
+        ClassificationResult result = classifier(DEFAULT_THRESHOLD, false)
+                .classifyTargets(extraction(
+                                f("NUMERO DE DOCUMENT", "PRORFR120"),
+                                f("Zone / Niveau", "N+2"),
+                                f("Titre du Dessin", "Plan RDC")),
+                        List.of(new TargetField("numero", List.of("Numéro")),
+                                new TargetField("niveau", List.of("Niveau")),
+                                new TargetField("titre", List.of("Titre"))));
+
+        assertThat(fieldNamed(result, "numero").value()).isEqualTo("PRORFR120");
+        assertThat(fieldNamed(result, "niveau").value()).isEqualTo("N+2");
+        assertThat(fieldNamed(result, "titre").value()).isEqualTo("Plan RDC");
+    }
+
+    @Test
+    void word_set_comparison_never_bridges_unrelated_labels() {
+        // Contre-epreuve : les couples qui ne doivent PAS se rattacher restent tres sous le seuil.
+        ClassificationResult result = classifier(DEFAULT_THRESHOLD, false)
+                .classifyTargets(extraction(f("Auteur", "J. Martin"), f("Date", "01/02/2026")),
+                        List.of(new TargetField("numero", List.of("Numéro")),
+                                new TargetField("type", List.of("Type"))));
+
+        assertThat(fieldNamed(result, "numero").status()).isEqualTo(FieldStatus.MISSING);
+        assertThat(fieldNamed(result, "type").status()).isEqualTo(FieldStatus.MISSING);
+    }
+
+    @Test
+    void exact_label_still_outranks_a_word_subset_of_the_same_score() {
+        // « Doc » doit aller au champ dont le synonyme est exactement « Doc », pas a celui dont
+        // « N° Doc » ne matche que par sous-ensemble de mots : la correspondance par mots est
+        // classee juste SOUS la chaine entiere, sinon l'ordre de declaration trancherait.
+        ClassificationResult result = classifier(DEFAULT_THRESHOLD, false)
+                .classifyTargets(extraction(f("Doc", "X-1")),
+                        List.of(new TargetField("champ_compose", List.of("N° Doc")),
+                                new TargetField("champ_exact", List.of("Doc"))));
+
+        assertThat(fieldNamed(result, "champ_exact").value()).isEqualTo("X-1");
+        assertThat(fieldNamed(result, "champ_compose").status()).isEqualTo(FieldStatus.MISSING);
+    }
+
+    @Test
+    void greedy_global_assignment_still_applies_on_caller_supplied_targets() {
+        // Deux champs revendiquent la meme paire : le meilleur score l'emporte, l'autre ne prend
+        // pas la paire par simple anteriorite dans la liste (regle deja verifiee sur le yaml).
+        ClassificationResult result = classifier(DEFAULT_THRESHOLD, false)
+                .classifyTargets(extraction(f("Niveau", "N+2")),
+                        List.of(new TargetField("champ_a", List.of("Niveau")),
+                                new TargetField("champ_b", List.of("Niveau"))));
+
+        assertThat(fieldNamed(result, "champ_a").value()).isEqualTo("N+2");
+        assertThat(fieldNamed(result, "champ_b").status()).isEqualTo(FieldStatus.MISSING);
     }
 }
