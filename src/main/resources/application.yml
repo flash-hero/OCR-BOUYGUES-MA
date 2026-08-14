@@ -1,50 +1,108 @@
 spring:
   application:
     name: edoc-ocr
+  servlet:
+    multipart:
+      # Un plan A0 scanne depasse largement la limite Spring par defaut (1 Mo / 10 Mo).
+      # Aligne sur la limite de depot d'eDoc (environment.apiMetadata.fileMaxSize = 10 Mo)
+      # avec de la marge, le document etant recu tel quel depuis eDoc.
+      max-file-size: 64MB
+      max-request-size: 64MB
+
+server:
+  # 8081 et non 8080 : le back-end eDoc occupe deja 8080 en local, les deux tournent ensemble.
+  port: ${EDOC_OCR_PORT:8081}
+
 # Les timeouts HTTP sont portes par le request factory dans OcrConfig.
 
-mistral:
-  ocr:
-    # La cle vient de MISTRAL_API_KEY (variable d'environnement ou fichier .env, jamais commitee).
-    api-key: ${MISTRAL_API_KEY:}
-    # Endpoint : api.mistral.ai (La Plateforme) OU un Target URI Azure AI Foundry.
-    # Surchargeable via .env sans toucher au code.
-    base-url: ${MISTRAL_OCR_BASE_URL:https://api.mistral.ai}
-    ocr-path: ${MISTRAL_OCR_PATH:/v1/ocr}
-    # Sur La Plateforme : modele EPINGLE (jamais -latest). Sur Azure : le NOM DU DEPLOIEMENT.
-    model: ${MISTRAL_OCR_MODEL:mistral-ocr-4-0}
-    max-annotation-pages: 8
-    # Cache de reponses adresse par contenu : re-lancer le test sur un document deja traite
-    # (meme coin, meme resolution) ne rappelle pas l'API. S'invalide seul si le prompt/la
-    # resolution changent (le corps de requete, donc la cle, change).
-    cache-enabled: ${MISTRAL_OCR_CACHE_ENABLED:true}
-    cache-dir: ${MISTRAL_OCR_CACHE_DIR:.ocr-cache}
-    # Consensus multi-echantillons : /v1/ocr n'a NI temperature NI seed, donc deux requetes
-    # identiques peuvent differer (12.pdf a bascule found true->false ; 15.pdf 77->19 paires). On
-    # echantillonne S fois le meme appel et on retient un representant robuste (vote majoritaire sur
-    # cartoucheFound, mediane du nombre de paires) SANS fusionner ni filtrer. 3 par defaut ; 1
-    # desactive le consensus (1 seul appel). Le choix est fige dans le cache : re-lancer ne recoute rien.
-    # 5 par defaut (mesure 2026-07-21) : les echantillons partent en parallele, donc ne coutent que la
-    # queue de latence (~+5 s sur les plans les plus lourds) et stabilisent les documents dont
-    # l'annotation est bimodale (12.pdf : 5 echantillons -> forme propre a 9 paires, 3 -> loterie).
-    samples: ${MISTRAL_OCR_SAMPLES:5}
-    # Nouvelles tentatives sur erreur transitoire (429 trop d'appels, 503, timeout) avec back-off.
-    max-retries: ${MISTRAL_OCR_MAX_RETRIES:2}
-    # --- Leviers de latence des grands plans (les changer invalide le cache : attendu) ---
-    # Resolution du decoupage de coin envoye a Mistral (grand cote, px).
-    crop-long-px: ${MISTRAL_OCR_CROP_LONG_PX:3400}
-    # Resolution du rendu pleine page de la passe 1 (localisation grossiere seulement).
-    locate-long-px: ${MISTRAL_OCR_LOCATE_LONG_PX:1400}
-    # Fraction de page prise depuis chaque coin (moins de surface = moins de texte a lire = appel plus court).
-    corner-fraction: ${MISTRAL_OCR_CORNER_FRACTION:0.40}
-    # Passe 1 (localisation pleine page). DESACTIVEE par defaut : mesure (2026-07-21, docs 11/12/16/20)
-    # — sur un plan dense c'est un OCR complet du plan, l'appel le plus lent de la vague (~40 % du
-    # temps), et la selection par score a choisi le MEME coin sur tous les docs testes sans elle.
-    # Reactivable sans toucher au code si un corpus futur la justifie.
-    locate-enabled: ${MISTRAL_OCR_LOCATE_ENABLED:false}
+ocr:
+  # La cle vient de OCR_API_KEY (variable d'environnement ou fichier .env, jamais commitee).
+  api-key: ${OCR_API_KEY:}
+  # Endpoint : api.mistral.ai (La Plateforme) OU un Target URI Azure AI Foundry.
+  # Surchargeable via .env sans toucher au code.
+  base-url: ${OCR_BASE_URL:https://api.mistral.ai}
+  # Forme d'API. chat = modele multimodal compatible OpenAI (deploiement gpt-5.5 sur Azure AI
+  # Foundry, POST chat-path) ; ocr = Mistral Document AI (POST ocr-path). Seuls le corps de
+  # requete et l'endroit ou lire l'annotation changent : decoupage des coins, consensus, score,
+  # cache, classification et validation sont identiques. Bascule sans toucher au code.
+  flavor: ${OCR_FLAVOR:chat}
+  ocr-path: ${OCR_PATH:/v1/ocr}
+  chat-path: ${OCR_CHAT_PATH:/openai/v1/chat/completions}
+  # Modele EPINGLE (jamais -latest, jamais un alias glissant) : sur Azure c'est le NOM DU
+  # DEPLOIEMENT. gpt-5.5 en chat ; mistral-ocr-4-0 si l'on repasse en flavor: ocr.
+  model: ${OCR_MODEL:gpt-5.5}
+  # --- Specifique flavor: chat ---
+  # Budget de reflexion. "none" : la tache est un pur report de ce qui est imprime, il n'y a rien a
+  # raisonner et la reflexion ne coute que de la latence (verifie sur le deploiement : accepte,
+  # reasoning_tokens=0). Vide = parametre non envoye (deploiement qui ne le supporterait pas).
+  reasoning-effort: ${OCR_REASONING_EFFORT:none}
+  # Plafond de reponse (max_completion_tokens). Large a dessein : un cartouche dense depasse 70
+  # paires et une reponse tronquee est un echantillon perdu. 0 = parametre non envoye.
+  max-output-tokens: ${OCR_MAX_OUTPUT_TOKENS:8000}
+  # Determinisme. Contrairement a /v1/ocr, l'endpoint chat accepte temperature ET seed (verifie sur
+  # le deploiement). On recopie du texte imprime : aucune raison de varier. La reproductibilite
+  # annoncee reste "best-effort" cote fournisseur, donc le consensus multi-echantillons reste utile.
+  # Valeur negative = parametre non envoye.
+  temperature: ${OCR_TEMPERATURE:0}
+  seed: ${OCR_SEED:7}
+  # Detail de lecture de l'image : high = pleine resolution par tuiles. Le cartouche est fait de
+  # petits caracteres, une lecture degradee (low/auto) les perd. Vide = parametre non envoye.
+  image-detail: ${OCR_IMAGE_DETAIL:high}
+  max-annotation-pages: 8
+  # Cache de reponses adresse par contenu : re-lancer le test sur un document deja traite
+  # (meme coin, meme resolution) ne rappelle pas l'API. S'invalide seul si le prompt/la
+  # resolution changent (le corps de requete, donc la cle, change).
+  cache-enabled: ${OCR_CACHE_ENABLED:true}
+  cache-dir: ${OCR_CACHE_DIR:.ocr-cache}
+  # Consensus multi-echantillons : on echantillonne S fois le meme appel et on retient un
+  # representant robuste (vote majoritaire sur cartoucheFound, mediane du nombre de paires) SANS
+  # fusionner ni filtrer. Le choix est fige dans le cache : re-lancer ne recoute rien.
+  # 1 par defaut sur gpt-5.5 : l'endpoint chat accepte temperature=0 et seed (la ou /v1/ocr,
+  # sans parametre de determinisme, rendait 12.pdf bimodal — 5 par defaut a l'epoque), et le
+  # double passage du corpus verifie la stabilite (voir AGENT_CONTEXT.md, session 2026-08-04).
+  # Le mecanisme reste en place : remonter S en flavor: ocr, ou si le fournisseur derive.
+  # ATTENTION en flavor: chat — un echantillon = une image facturee au token.
+  samples: ${OCR_SAMPLES:1}
+  # Nouvelles tentatives sur erreur transitoire (429 trop d'appels, 503, timeout) avec back-off.
+  max-retries: ${OCR_MAX_RETRIES:2}
+  # --- Leviers de latence des grands plans (les changer invalide le cache : attendu) ---
+  # Resolution du decoupage de coin envoye a Mistral (grand cote, px).
+  crop-long-px: ${OCR_CROP_LONG_PX:3400}
+  # Resolution du rendu pleine page de la passe 1 (localisation grossiere seulement).
+  locate-long-px: ${OCR_LOCATE_LONG_PX:1400}
+  # Fraction de page prise depuis chaque coin (moins de surface = moins de texte a lire).
+  # NE PAS AUGMENTER sans mesurer sur le corpus COMPLET : 0.55 a ete teste le 2026-08-04 et
+  # REJETE. Il corrigeait bien 12.pdf (dont la grille d'identification est hors image a 0.40)
+  # mais degradait gravement d'autres documents en elargissant l'image : 4.pdf 13 -> 5 paires
+  # avec l'appariement en-tete/valeur effondre ("EXE : 6A", "75 : C" — des valeurs appariees a
+  # des valeurs, tous les libelles perdus) ; 24.pdf tronquait "FUTUR PALAIS DE JUSTICE DE PARIS
+  # PRO" en "FUTUR PALAIS" ; 8.pdf 32 -> 11. Un panel de 7 documents ne l'avait PAS vu.
+  # Regle qui en decoule : plus il y a de texte dans l'image, moins la transcription est fidele.
+  corner-fraction: ${OCR_CORNER_FRACTION:0.40}
+  # Prend les coins sur la zone REELLEMENT DESSINEE (marges blanches exclues) et non sur la
+  # feuille. Mesure du 2026-08-04 : 13.pdf est un plan paysage pose dans la moitie haute d'une
+  # page portrait ; ses coins bas etaient du blanc pur et son cartouche n'etait atteint par aucun
+  # coin (7 paires + controle qualite en echec). Avec le rognage : 11 paires, controle passe.
+  # Sans effet sur les documents dont le dessin remplit deja la feuille (garde-fou de couverture).
+  ink-bounds-enabled: ${OCR_INK_BOUNDS_ENABLED:true}
+  # Passe 1 (localisation). ACTIVE par defaut depuis la bascule chat : elle renvoie la BOITE
+  # ENGLOBANTE du cartouche (plus une rotation corrective), et la lecture se fait en un seul appel
+  # sur cette boite re-rendue en haute resolution — la plus petite image contenant tout le
+  # cartouche, donc la transcription la plus fidele (regle mesuree : moins de texte = mieux lu).
+  # NB : l'ancienne mesure "passe 1 = appel le plus lent" (2026-07-21) valait pour /v1/ocr, qui
+  # OCRisait tout le plan pour localiser ; en chat on ne demande QUE la position, l'appel est court.
+  # false = replis directs (pleine page en standard, vague des 4 coins en grand format).
+  locate-enabled: ${OCR_LOCATE_ENABLED:true}
 
 edoc:
-  samples-dir: data/samples
+  api:
+    # Cle partagee exigee dans l'en-tete X-Api-Key sur /api/**. Vide = aucune authentification
+    # (poste local uniquement ; un avertissement est journalise au demarrage). Jamais commitee :
+    # la valeur vient d'une variable d'environnement ou du .env.
+    key: ${EDOC_API_KEY:}
+    # Complete les libelles fournis par l'appelant avec ceux de schema_fields.yaml.
+    # HEURISTIQUE NON MESUREE (pas de verite terrain a ce jour) : desactivable sans toucher au code.
+    enrich-synonyms: ${EDOC_API_ENRICH_SYNONYMS:true}
   classification:
     # Seuil de correspondance floue (echelle 0-100 de FuzzySearch.ratio) entre un libelle lu et
     # un synonyme. PROVISOIRE : non calibre empiriquement (data/annotations.xlsx pas encore
