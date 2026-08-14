@@ -46,7 +46,7 @@ class DotenvEnvironmentPostProcessorTest {
             throws Exception {
         Path env = dotenv(tmp, """
                 # un commentaire
-                MISTRAL_API_KEY=abc123
+                OCR_API_KEY=abc123
 
                 export FOO="bar baz"
                 EMPTY=
@@ -55,7 +55,7 @@ class DotenvEnvironmentPostProcessorTest {
 
         Map<String, Object> values = new DotenvEnvironmentPostProcessor().parse(env);
 
-        assertThat(values).containsEntry("MISTRAL_API_KEY", "abc123");
+        assertThat(values).containsEntry("OCR_API_KEY", "abc123");
         assertThat(values).containsEntry("FOO", "bar baz");
         assertThat(values).containsEntry("EMPTY", "");
         assertThat(values).containsEntry("QUOTED", "q");
@@ -64,23 +64,23 @@ class DotenvEnvironmentPostProcessorTest {
 
     @Test
     void a_dotenv_value_becomes_resolvable_as_a_placeholder() {
-        // La raison d'etre de la classe : ${MISTRAL_API_KEY} dans application.yml doit se resoudre.
+        // La raison d'etre de la classe : ${OCR_API_KEY} dans application.yml doit se resoudre.
         StandardEnvironment environment = environmentWithRealVars(Map.of());
 
-        runWithTempFile(environment, "MISTRAL_API_KEY=depuis-le-fichier");
+        runWithTempFile(environment, "OCR_API_KEY=depuis-le-fichier");
 
-        assertThat(environment.getProperty("MISTRAL_API_KEY")).isEqualTo("depuis-le-fichier");
-        assertThat(environment.resolvePlaceholders("${MISTRAL_API_KEY}")).isEqualTo("depuis-le-fichier");
+        assertThat(environment.getProperty("OCR_API_KEY")).isEqualTo("depuis-le-fichier");
+        assertThat(environment.resolvePlaceholders("${OCR_API_KEY}")).isEqualTo("depuis-le-fichier");
     }
 
     @Test
     void a_real_environment_variable_wins_over_the_dotenv_file() {
         // Contrat documente dans le javadoc de la classe.
-        StandardEnvironment environment = environmentWithRealVars(Map.of("MISTRAL_API_KEY", "depuis-l-os"));
+        StandardEnvironment environment = environmentWithRealVars(Map.of("OCR_API_KEY", "depuis-l-os"));
 
-        runWithTempFile(environment, "MISTRAL_API_KEY=depuis-le-fichier");
+        runWithTempFile(environment, "OCR_API_KEY=depuis-le-fichier");
 
-        assertThat(environment.getProperty("MISTRAL_API_KEY")).isEqualTo("depuis-l-os");
+        assertThat(environment.getProperty("OCR_API_KEY")).isEqualTo("depuis-l-os");
     }
 
     @Test
@@ -89,7 +89,7 @@ class DotenvEnvironmentPostProcessorTest {
         // une source .env placee en tete primerait sur les vraies variables.
         StandardEnvironment environment = environmentWithRealVars(Map.of("AUTRE_VAR", "x"));
 
-        runWithTempFile(environment, "MISTRAL_API_KEY=depuis-le-fichier");
+        runWithTempFile(environment, "OCR_API_KEY=depuis-le-fichier");
 
         List<String> names = sourceNames(environment);
         assertThat(names).contains("dotenvFile");
@@ -100,12 +100,12 @@ class DotenvEnvironmentPostProcessorTest {
     void an_environment_without_a_system_environment_source_does_not_fail(@TempDir Path tmp) throws Exception {
         // MockEnvironment n'a pas de source « systemEnvironment » : addAfter() sur un nom absent
         // leve IllegalArgumentException et ferait echouer le demarrage.
-        Path env = dotenv(tmp, "MISTRAL_API_KEY=depuis-le-fichier");
+        Path env = dotenv(tmp, "OCR_API_KEY=depuis-le-fichier");
         MockEnvironment environment = new MockEnvironment();
 
         assertThatCode(() -> new DotenvEnvironmentPostProcessor(env).postProcessEnvironment(environment, null))
                 .doesNotThrowAnyException();
-        assertThat(environment.getProperty("MISTRAL_API_KEY")).isEqualTo("depuis-le-fichier");
+        assertThat(environment.getProperty("OCR_API_KEY")).isEqualTo("depuis-le-fichier");
     }
 
     @Test
@@ -137,24 +137,24 @@ class DotenvEnvironmentPostProcessorTest {
     void running_twice_in_the_same_jvm_yields_the_same_result(@TempDir Path tmp) throws Exception {
         // Sans effet de bord global, le post-processeur est idempotent : deux environnements
         // successifs voient la meme chose.
-        Path env = dotenv(tmp, "MISTRAL_API_KEY=depuis-le-fichier");
+        Path env = dotenv(tmp, "OCR_API_KEY=depuis-le-fichier");
 
         StandardEnvironment first = environmentWithRealVars(Map.of());
         run(env, first);
         StandardEnvironment second = environmentWithRealVars(Map.of());
         run(env, second);
 
-        assertThat(first.getProperty("MISTRAL_API_KEY")).isEqualTo("depuis-le-fichier");
-        assertThat(second.getProperty("MISTRAL_API_KEY")).isEqualTo("depuis-le-fichier");
+        assertThat(first.getProperty("OCR_API_KEY")).isEqualTo("depuis-le-fichier");
+        assertThat(second.getProperty("OCR_API_KEY")).isEqualTo("depuis-le-fichier");
         assertThat(sourceNames(second)).contains("dotenvFile");
     }
 
     @Test
     void an_already_defined_property_is_not_duplicated_into_the_dotenv_source() {
-        StandardEnvironment environment = environmentWithRealVars(Map.of("MISTRAL_API_KEY", "depuis-l-os"));
+        StandardEnvironment environment = environmentWithRealVars(Map.of("OCR_API_KEY", "depuis-l-os"));
         environment.getPropertySources().addLast(new MapPropertySource("autre", Map.of("DEJA", "la")));
 
-        runWithTempFile(environment, "MISTRAL_API_KEY=ignore\nNOUVELLE=ajoutee");
+        runWithTempFile(environment, "OCR_API_KEY=ignore\nNOUVELLE=ajoutee");
 
         MapPropertySource dotenv = (MapPropertySource) environment.getPropertySources().get("dotenvFile");
         assertThat(dotenv).isNotNull();
