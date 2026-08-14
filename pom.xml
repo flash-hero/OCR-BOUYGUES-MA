@@ -71,6 +71,14 @@
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <!-- Le lancement "optimise" de spring-boot:run bride le JIT (TieredStopAtLevel=1)
+                         pour accelerer le demarrage : mesure ici, le rendu PDF - le gros du travail
+                         CPU du moteur - tourne alors ~3x plus lentement. On rend au JIT sa pleine
+                         puissance : quelques secondes de demarrage contre des secondes gagnees sur
+                         CHAQUE document traite. -->
+                    <optimizedLaunch>false</optimizedLaunch>
+                </configuration>
             </plugin>
         </plugins>
     </build>
