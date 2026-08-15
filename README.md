@@ -66,7 +66,7 @@ HUA    EXE   TRA      36  EXT  EX     PLA  3100   E
 
 ## 📍 Où vit ce code
 
-Ce dépôt est le **moteur autonome** : le livrable du PFA, qui se lance, se teste et se mesure seul.
+Ce dépôt est le **moteur autonome** :
 
 Le même code a depuis été **fusionné dans le back-end eDoc** (paquet `com.bycnit.socle.ocr`), où il
 tourne dans le même processus que l'application — un seul service, un seul build. La logique de
@@ -531,7 +531,7 @@ projet expliqué simplement), `howtorun.md`, `instruction.md`, `plan_travail_ocr
 
 <div align="center">
 
-**PFA — Bouygues Construction IT Maroc**
-Oussama Tabakh · encadrant M. Boumenzeh
+**Bouygues Construction IT Maroc**
+Oussama Tabakh
 
 </div>
