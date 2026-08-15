@@ -1,361 +1,537 @@
-# PFA Bouygues — Moteur OCR eDoc
+<div align="center">
 
-Remplissage automatique du formulaire eDoc « Nouveau document » à partir du document déposé.
-Quand un utilisateur dépose un plan technique, le système lit son **cartouche** (le bloc
-d'identification du plan) et pré-remplit les champs du formulaire à sa place. L'utilisateur vérifie
-et corrige l'exception, au lieu de tout saisir.
+# eDoc OCR — lecture automatique de cartouche
 
-**Moteur de lecture : Mistral OCR.** **Stack imposée par l'encadrant : Java 17, Spring Boot 3.x.**
-_(Un premier prototype de cadrage avait été esquissé en Python/FastAPI ; la contrainte JDK 17 imposée
-par l'encadrant fixe désormais l'implémentation en Java.)_
+**Déposez un plan technique. Le formulaire se remplit tout seul.**
 
-> **État du dépôt :** la première livraison — l'incrément **ÉA1** (Mistral seul, détection &
-> extraction génériques) — est implémentée et fonctionne. Voir la section
-> [État actuel — ÉA1](#état-actuel--éa1-mistral-seul) pour installer, configurer et lancer.
-> La suite (classification, validation, API REST, Tesseract) suit le plan en fin de document.
+[![Java](https://img.shields.io/badge/Java-17-orange.svg)](https://openjdk.org/projects/jdk/17/)
+[![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.4.1-6DB33F.svg)](https://spring.io/projects/spring-boot)
+[![PDFBox](https://img.shields.io/badge/PDFBox-3.0.3-red.svg)](https://pdfbox.apache.org/)
+[![Tests](https://img.shields.io/badge/tests-191%20passing-brightgreen.svg)](#-tests)
+[![Latence](https://img.shields.io/badge/latence%20m%C3%A9diane-4.3s-blue.svg)](#-r%C3%A9sultats-mesur%C3%A9s)
+[![Statut](https://img.shields.io/badge/statut-int%C3%A9gr%C3%A9%20en%20production-success.svg)](#-o%C3%B9-vit-ce-code)
 
-## Documentation
-
-| Fichier | Contenu |
-|---|---|
-| [`docs/understand.md`](docs/understand.md) | Explication complète de l'architecture, en langage simple, avec exemples |
-| [`docs/howtorun.md`](docs/howtorun.md) | Guide pratique pas à pas pour installer et lancer le moteur |
-| [`docs/instruction.md`](docs/instruction.md) | Brief original du projet + état d'avancement à jour |
-| [`docs/AGENT_CONTEXT.md`](docs/AGENT_CONTEXT.md) | Résumé technique dense pour reprendre le projet dans une nouvelle session IA |
-| [`docs/plan_travail_ocr_edoc.md`](docs/plan_travail_ocr_edoc.md) | Plan de travail détaillé (étapes É1 à É8) |
-| [`docs/Cahier des charges 1er Phase OCR.pdf`](<docs/Cahier des charges 1er Phase OCR.pdf>) | Cahier des charges original de l'encadrant |
+</div>
 
 ---
 
-## Principe : un lecteur, plusieurs vérificateurs
+## Le problème
 
-- **Un seul lecteur — Mistral OCR.** On ne lui demande pas « donne-moi tout le texte » ; on lui fournit un *schéma* (la liste exacte des champs, avec pour chacun une description et ses synonymes de libellés) et il le renvoie **rempli** en JSON structuré (`document_annotation_format`).
-- **Plusieurs vérificateurs, non-IA.** Avant d'écrire une valeur dans le formulaire, chaque réponse passe un poste de contrôle : listes officielles eDoc (valeurs autorisées des menus déroulants), règles de format du numéro, et texte natif du PDF quand il existe.
-- **L'IA propose, les vérificateurs disposent.** Les champs du formulaire sont des menus à valeurs imposées : une valeur inventée ne correspond à aucune entrée de la liste officielle, donc elle est repérée et jamais écrite comme fiable. **C'est le garde-fou anti-hallucination central.**
+Chaque plan technique déposé dans **eDoc** (la GED de Bouygues Construction) oblige son auteur à
+ressaisir à la main une dizaine de champs — numéro, phase, lot, émetteur, indice, niveau… — alors que
+**tout est déjà imprimé sur le document**, dans un bloc appelé le **cartouche**.
+
+Ce moteur lit ce cartouche et pré-remplit le formulaire. L'utilisateur **vérifie** au lieu de saisir.
+
+<table>
+<tr><th align="left">Ce que le PDF contient</th><th align="left">Ce que le moteur en fait</th></tr>
+<tr valign="top"><td>
+
+```
+PROJET PHASE EMETTEUR LOT ZONE NIVEAU TYPE NUMERO INDICE
+HUA    EXE   TRA      36  EXT  EX     PLA  3100   E
+```
+
+</td><td>
+
+```json
+{ "name": "spec_char2", "value": "EXE",
+  "status": "AUTO_VALIDATED",
+  "rawLabel": "PHASE", "matchScore": 100.0 }
+```
+
+</td></tr>
+</table>
 
 ---
 
-## Champs cibles
+## Sommaire
 
-| Type | Champs |
-|---|---|
-| Obligatoires | `PHASE`, `EMETTEUR`, `LOT`, `TYPE`, `ZONE`, `NIVEAU`, `NUMERO`, `Titre1` |
-| Optionnels | `Indice`, `Titre2`, `Titre3` *(Titre4 à confirmer, présent sur le formulaire)* |
-| Hors schéma | `PROJET`, `Commune`, `Secteur`… capturés en métadonnées, jamais forcés dans un champ |
-
-Champs codés (tous sauf les titres) : validés par rapprochement flou contre les tables de référence eDoc.
-
----
-
-## Le parcours d'un document
-
-1. **Réception** — le fichier arrive par l'API ; identification du format, isolation de la page 1 (seule porteuse du cartouche utile).
-2. **Préparation** — redressement de l'orientation si le document est pivoté.
-3. **Lecture** — un appel Mistral OCR : page + schéma + lexique des libellés → formulaire rempli (JSON) + confiance par mot.
-4. **Contrôle** — rapprochement avec les listes officielles, mise au format du numéro, nettoyage des titres ; attribution d'un statut par champ.
-5. **Restitution** — l'API renvoie le résultat champ par champ (valeur, statut, confiance) ; le formulaire eDoc s'en sert pour se pré-remplir.
+- [Où vit ce code](#-o%C3%B9-vit-ce-code)
+- [L'idée centrale](#-lid%C3%A9e-centrale)
+- [Démarrage rapide](#-d%C3%A9marrage-rapide)
+- [Comment ça marche](#%EF%B8%8F-comment-%C3%A7a-marche)
+- [Les trois métiers](#-les-trois-m%C3%A9tiers-jamais-m%C3%A9lang%C3%A9s)
+- [Le rattachement](#-le-rattachement--le-point-le-plus-d%C3%A9licat)
+- [API](#-api)
+- [Intégration dans eDoc](#-int%C3%A9gration-dans-edoc)
+- [Structure du code](#%EF%B8%8F-structure-du-code)
+- [Résultats mesurés](#-r%C3%A9sultats-mesur%C3%A9s)
+- [Tests](#-tests)
+- [Limites connues](#%EF%B8%8F-limites-connues)
+- [Feuille de route](#%EF%B8%8F-feuille-de-route)
+- [Reprendre le projet](#-reprendre-le-projet)
 
 ---
 
-## Trois statuts par champ
+## 📍 Où vit ce code
 
-| Statut | Signification | Formulaire |
+Ce dépôt est le **moteur autonome** : le livrable du PFA, qui se lance, se teste et se mesure seul.
+
+Le même code a depuis été **fusionné dans le back-end eDoc** (paquet `com.bycnit.socle.ocr`), où il
+tourne dans le même processus que l'application — un seul service, un seul build. La logique de
+lecture est identique ; seuls le paquet, la façon dont eDoc l'appelle et les versions de dépendances
+alignées sur eDoc changent.
+
+| | Ce dépôt (autonome) | Dans eDoc (fusionné) |
 |---|---|---|
-| `AUTO_VALIDATED` | Valeur lue **et** confirmée par la liste officielle | Rempli automatiquement |
-| `TO_REVIEW` | Correspondance douteuse ou lecture peu sûre | Pré-rempli et mis en évidence |
-| `MISSING` | Information absente ou illisible | Laissé vide — jamais rempli au hasard |
-
-Indicateur métier : **taux d'automatisation** = % de champs `AUTO_VALIDATED` corrects. Chiffre à minimiser : le **taux d'erreur silencieuse** (`AUTO_VALIDATED` faux).
+| Paquet | `com.bycn.edoc` | `com.bycnit.socle.ocr` |
+| Appel | `POST /api/v1/extractions` (8081) | `ExtractionService.extract(...)` en mémoire |
+| Spring Boot | 3.4.1 | 3.2.5 (parent eDoc) |
+| Tests | 191 | 171 |
 
 ---
 
-## Problèmes traités (constatés sur documents réels)
+## 💡 L'idée centrale
 
-| Problème | Réponse |
+> **On lit le texte que le PDF contient déjà. On ne « regarde » la page que s'il n'en a pas.**
+
+Un plan produit par un logiciel de CAO **n'est pas une photo** : c'est un dessin vectoriel accompagné
+de **son texte**, rangé dans le fichier, exact, avec sa mise en page. PDFBox l'extrait localement —
+aucun appel réseau, quelques dizaines de millisecondes.
+
+Sur le corpus de test, **20 documents sur 28** sont dans ce cas. Les 8 autres sont des **scans** : pour
+eux seulement, il faut regarder l'image.
+
+### À quoi sert le modèle, alors ?
+
+À **une seule chose**, mais qu'aucune règle ne sait faire : **reconnaître lequel des blocs est le
+cartouche**. Le texte extrait contient aussi les cotes, les altitudes, les légendes, l'annuaire des
+intervenants — des centaines de lignes.
+
+> [!IMPORTANT]
+> **On ne lui dit jamais où regarder.** Lui désigner une zone créerait un point de défaillance
+> unique : si la zone est fausse, tout est faux, et rien ne le signale. En lui donnant le texte
+> complet, il voit le vrai cartouche **et** ses concurrents, et il tranche.
+
+---
+
+## 🚀 Démarrage rapide
+
+### Prérequis
+
+| Outil | Version |
 |---|---|
-| Position du cartouche variable (4 coins possibles sur A0/A1) | Le schéma dit *quoi* chercher, pas *où* ; l'OCR lit la page entière |
-| Texte du cartouche minuscule sur un plan géant | Stratégie de repli : crop haute résolution autour du cartouche (voir ÉA1, lecture en deux passes) |
-| Libellés différents selon les clients (N° Doc / N° GED / N° Chrono) | Lexique de synonymes par champ, en configuration |
-| Documents scannés, parfois pivotés | Redressement systématique avant lecture (`/Rotate` + correction locale si besoin) |
-| Hallucination sur champ codé | Aucune auto-validation sans match en table de référence |
-| Nom de fichier trompeur | Jamais utilisé comme source de vérité ; seul le contenu fait foi |
-| Formats multiples (PDF, Word, Excel, IFC) | PDF → OCR ; Word/Excel → lecture directe ; IFC → pas de cartouche |
+| JDK | **17** |
+| Maven | 3.9+ |
 
----
+### Installation
 
-## Deux stratégies d'extraction
+```powershell
+git clone https://github.com/flash-hero/PFA-BOUYGUES-.git
+cd PFA-BOUYGUES-
 
-- **Stratégie A (défaut)** — page 1 entière envoyée au lecteur. La plus simple, validée en premier.
-- **Stratégie B (repli plans denses)** — si A échoue sur les grands formats, découpage haute résolution
-  autour du cartouche. Le choix se tranche par la mesure, pas par opinion. **Cette stratégie B est
-  déjà implémentée en ÉA1** sous la forme d'une lecture en deux passes (localisation puis extraction
-  sur le découpage), avec contrôle qualité et repli sur les autres coins — voir plus bas.
+./scripts/check_setup.ps1        # vérifie JDK, Maven, dépendances, clé API
 
----
+Copy-Item .env.example .env      # puis renseigner OCR_API_KEY
+```
 
-## Leviers en réserve (si la précision l'exige)
+### Configuration
 
-Mistral OCR reste le seul lecteur ; on peut ajouter des *vérificateurs* :
-- **Texte natif du PDF** comme contre-lecture gratuite (accord → confiance renforcée).
-- **Double lecture** (deux formulations, comparaison des réponses).
-- **Enrichissement du lexique** par client — modification de configuration, sans toucher au code.
-
----
----
-
-# État actuel — ÉA1 (Mistral seul)
-
-Cette première livraison couvre **uniquement l'ÉA1** : un socle Spring Boot + le premier appel à
-**Mistral OCR** avec un **schéma d'annotation ouvert**, et le « test décisif » qui répond à une
-question binaire : **Mistral peut-il détecter un cartouche générique et en extraire correctement les
-paires libellé/valeur ?** Pas de classification, pas de validation, pas d'API REST, pas de base de
-données, **pas de Tesseract** (phases ultérieures).
-
-## Stack (ÉA1)
-
-- Java **17** (imposé), Spring Boot **3.4.1**
-- Appel Mistral OCR en REST direct via `RestClient` (pas de SDK Java)
-- Apache PDFBox 3 (comptage de pages, base64, rendu d'une région de page)
-- Tests : JUnit 5 + Mockito + AssertJ (hors ligne)
-
-Modèle Mistral **épinglé** : `mistral-ocr-4-0` (jamais `-latest`, pour la reproductibilité).
-
-## Prérequis
-
-- JDK 17 dans le `PATH` (`java`/`javac`)
-- Maven 3.9+
-- Une clé API Mistral
-
-## Configuration
-
-1. Copiez le modèle d'environnement et renseignez votre clé :
-   ```powershell
-   Copy-Item .env.example .env
-   # éditez .env :  MISTRAL_API_KEY=sk-...
-   ```
-   Le `.env` est chargé automatiquement au démarrage (voir `DotenvEnvironmentPostProcessor`) et
-   **n'est jamais commité**. Une vraie variable d'environnement `MISTRAL_API_KEY` a la priorité sur le `.env`.
-
-2. Déposez vos documents d'exemple dans **`data/samples/`** (voir le README de ce dossier).
-
-   > **Pourquoi `data/samples/` et pas `src/main/resources/samples/` ?** Ce sont des plans internes
-   > potentiellement confidentiels : on ne veut ni les empaqueter dans le JAR ni les charger dans le
-   > classpath. `data/samples/*.pdf` est déjà ignoré par git ; seuls l'arborescence et le README sont versionnés.
-
-### Cibler Azure AI Foundry (Mistral Document AI) au lieu de La Plateforme
-
-Le client est agnostique de l'hébergeur : l'endpoint est surchargeable via `.env` (aucun changement de code).
-Pour un déploiement **Azure AI Foundry**, ajoutez dans `.env` :
+Le fichier `.env` n'est **jamais** commité (il est dans le `.gitignore`).
 
 ```dotenv
-MISTRAL_OCR_BASE_URL=https://<resource>.services.ai.azure.com
-MISTRAL_OCR_PATH=/providers/mistral/azure/ocr?api-version=2024-05-01-preview
-MISTRAL_OCR_MODEL=<nom-du-déploiement>     # sur Azure, le nom du déploiement
+OCR_API_KEY=…
+OCR_BASE_URL=https://<ressource>.services.ai.azure.com
+OCR_FLAVOR=chat
+OCR_MODEL=gpt-5.5
+OCR_CHAT_PATH=/openai/v1/chat/completions
 ```
 
-Trois particularités Azure gérées par le code :
-- **`?api-version=...` obligatoire** sur la route Foundry (sinon 400/404) → porté par `MISTRAL_OCR_PATH`.
-- **`Content-Length` exigé** par la passerelle APIM : le corps est envoyé en `byte[]` (longueur connue),
-  jamais en `Transfer-Encoding: chunked` (voir `MistralOcrClient` / `OcrConfig`).
-- **Auth** : l'en-tête `Authorization: Bearer` **et** `api-key` sont envoyés — le serveur utilise celui qu'il reconnaît.
-
-## 1. Vérifier l'environnement
+### Lancer
 
 ```powershell
-./scripts/check_setup.ps1
+mvn test              # 191 tests, aucun appel réseau, donc gratuits
+mvn spring-boot:run   # le service autonome, port 8081
 ```
 
-Contrôle, en échouant **proprement** (jamais de stack trace) : JDK 17 actif, javac 17, `JAVA_HOME`,
-Maven présent, dépendances Maven résolues, clé API lisible, documents d'exemple présents. Code de
-sortie non nul si un point bloquant manque. Option `-SkipMaven` pour sauter la résolution Maven.
+> [!NOTE]
+> Ce port n'existe que pour le moteur **autonome**, c'est-à-dire ce dépôt. Dans eDoc, le moteur
+> tourne dans le back-end : tout se passe sur le port 8080 et rien n'écoute sur 8081.
 
-## 2. Lancer le test décisif
+### Diagnostic
+
+Le moteur journalise, pour chaque document, la voie empruntée :
+
+```
+Couche texte : 19481 caractères, 12 paires en 3776 ms
+Aucune couche texte exploitable : lecture par l'image
+```
+
+Pour voir **exactement** les images envoyées au modèle — le réflexe à avoir **avant** de conclure
+« le modèle n'a pas su lire » :
 
 ```powershell
-./scripts/run_smoke.ps1
+mvn spring-boot:run "-Dspring-boot.run.jvmArguments=-Dedoc.debug-dump-dir=C:/tmp/crops"
 ```
 
-Équivaut à `mvn -DskipTests spring-boot:run "-Dspring-boot.run.profiles=smoke"`. Pour chaque PDF de
-`data/samples/`, le programme envoie le document à Mistral OCR avec le schéma d'annotation ouvert,
-puis affiche `cartoucheFound`, la liste des paires **libellé → valeur**, et le **JSON brut** de
-l'annotation. Le verdict sur la qualité de l'extraction est **humain** (lecture des résultats).
+---
 
-## Tests unitaires (hors ligne)
+## ⚙️ Comment ça marche
+
+```mermaid
+flowchart TD
+    A[PDF déposé] --> B{Le PDF a-t-il<br/>une couche texte ?}
+    B -->|Oui — 20/28| C[PDFBox extrait tout le texte<br/>0 appel réseau, ~40 ms]
+    C --> D[Le texte COMPLET part au modèle<br/>avec les champs demandés]
+    D --> E{Ça ressemble à un cartouche<br/>ET ça porte un libellé demandé ?}
+    E -->|Oui| F[Paires + rattachements]
+    E -->|Non| G
+    B -->|Non — 8/28 scans| G[Localisation : page réduite<br/>→ boîte + rotation]
+    G --> H[Lecture ciblée : cette seule boîte<br/>rendue en haute résolution]
+    H --> I{Convaincant ?}
+    I -->|Non| J[Balayage des 4 coins<br/>en parallèle]
+    I -->|Oui| F
+    J --> F
+    F --> K[Classification sur les champs demandés]
+    K --> L[Validation contre les valeurs officielles]
+    L --> M[Une valeur + un statut par champ]
+```
+
+**La voie principale coûte un seul appel**, 2,4 à 3,8 s mesurés. La voie image en coûte deux, plus
+6 à 7 s de CPU pour dessiner un A0 chargé — d'où l'écart de latence entre les deux.
+
+---
+
+## 🧩 Les trois métiers, jamais mélangés
+
+| Étape | Ce qu'elle fait | Ce qu'elle ignore |
+|---|---|---|
+| **Extraction** | Trouve le cartouche, rend **toutes** ses paires libellé/valeur telles qu'imprimées | Quels champs existent dans eDoc |
+| **Classification** | Range chaque paire sur un champ demandé | Si la valeur est correcte |
+| **Validation** | Confronte la valeur aux valeurs officielles du projet | D'où vient la valeur |
+
+**Pourquoi séparer ?** Chaque projet eDoc configure **sa propre** liste de champs, et les valeurs
+officielles vivent dans Documentum. Le moteur ne connaît donc **aucun champ à l'avance** : ils lui
+sont fournis dans l'appel. L'extraction, elle, reste identique pour tout le monde.
+
+### Trois statuts par champ
+
+| Statut | Signification | Effet dans le formulaire |
+|---|---|---|
+| `AUTO_VALIDATED` | Valeur lue **et** confirmée par la liste officielle | Rempli, vert |
+| `TO_REVIEW` | Valeur lue, mais rien ne la confirme | Rempli, orange |
+| `MISSING` | Rien de lisible | Laissé **vide** — jamais rempli au hasard |
+
+> [!WARNING]
+> **Règle D11 — non négociable.** Une valeur absente de la liste officielle n'est **jamais** rejetée
+> ni effacée : elle passe en `TO_REVIEW`. Une liste officielle n'est jamais complète, et un chantier
+> peut légitimement utiliser un code tout neuf.
+
+---
+
+## 🔗 Le rattachement : le point le plus délicat
+
+Une fois le cartouche lu, il faut décider **quelle paire va dans quel champ**. C'est là que se jouent
+la plupart des erreurs, parce qu'un cartouche imprime rarement le mot attendu tout seul :
+
+| Ce qui est imprimé | Ce qu'eDoc demande | Ressemblance des chaînes |
+|---|---|---|
+| `NUMERO DE DOCUMENT` | Numéro | 50 / 100 |
+| `Zone / Niveau` | Niveau | 63 / 100 |
+| `Titre du Dessin` | Titre | 50 / 100 |
+
+Le mot est là, mais noyé — et une comparaison de chaînes entières s'effondre sous le seuil de 80.
+
+**Deux mécanismes combinés :**
+
+1. **Le modèle propose le rattachement.** Il a le document sous les yeux et la liste des champs. Les
+   noms qu'il peut citer sont **contraints par énumération** à la liste demandée — il ne peut pas en
+   inventer un.
+2. **La comparaison se fait aussi mot à mot**, en plus de la chaîne entière, et classée **juste en
+   dessous** de celle-ci (sinon « Doc » vaudrait autant pour un champ « Doc » que pour « N° Doc », et
+   l'ordre de la liste trancherait).
+
+**Deux garde-fous — chacun vient d'un défaut réellement observé. Ne jamais les retirer :**
+
+| Garde-fou | Ce qu'il empêche |
+|---|---|
+| **Anti-invention** | La valeur proposée doit exister **telle quelle** parmi les paires lues, sinon la proposition est jetée |
+| **Anti-contresens** | Le libellé imprimé doit avoir un minimum de rapport avec le champ. Sans lui, le modèle a rangé `PROJET = "FUTUR PALAIS DE JUSTICE DE PARIS"` dans le champ **Phase** |
+
+Un champ dont la proposition est refusée repasse par la comparaison floue. Une paire déjà prise n'est
+plus offerte à un autre champ.
+
+---
+
+## 🔌 API
+
+### `POST /api/v1/extractions`
+
+Multipart : `file` (le document) + `request` (JSON).
+
+<details>
+<summary><b>Requête</b></summary>
+
+```json
+{
+  "projectCode": "240716tdr",
+  "fields": [
+    { "name": "spec_char2",
+      "labels": ["Phase", "Pha"],
+      "allowedValues": [ {"code": "EXE", "libelle": "Exécution"},
+                         {"code": "DOE", "libelle": "Dossier des ouvrages exécutés"} ] },
+    { "name": "spec_char5",
+      "labels": ["Bâtiment", "Bat"],
+      "allowedValues": [] }
+  ]
+}
+```
+
+| Champ | Rôle |
+|---|---|
+| `name` | Le nom technique côté eDoc. Le moteur ne l'interprète **jamais**, il le renvoie tel quel |
+| `labels` | Les libellés sous lesquels ce champ peut apparaître sur le papier |
+| `allowedValues` | Les valeurs officielles. **Liste vide = champ libre** → `TO_REVIEW` |
+
+</details>
+
+<details>
+<summary><b>Réponse</b></summary>
+
+```json
+{
+  "cartoucheFound": true,
+  "mode": "TEXT_LAYER",
+  "corner": null,
+  "qualityPassed": true,
+  "durationMs": 4210,
+  "fields": [
+    { "name": "spec_char2", "value": "EXE", "status": "AUTO_VALIDATED",
+      "rawLabel": "PHASE", "matchScore": 100.0, "referenceCode": "EXE" }
+  ],
+  "unclassifiedPairs": [ { "label": "ECHELLE", "value": "1/50" } ]
+}
+```
+
+| Champ | À ne pas casser |
+|---|---|
+| `unclassifiedPairs` | Remonte **tout** ce qui a été lu sans champ correspondant — rien n'est perdu |
+| `qualityPassed` | À `false`, signale une lecture douteuse : l'appelant **doit** le montrer à l'utilisateur |
+| `mode` | Par quelle voie le document a été lu : `TEXT_LAYER`, `TWO_PASS_CROP`, `SINGLE_PAGE`, `NEEDS_TILING`. La première chose à regarder en diagnostic |
+
+</details>
+
+L'appel est protégé par l'en-tête `X-Api-Key`. Le traitement est **synchrone** : à 4,3 s de médiane,
+un job asynchrone compliquerait l'appelant sans rien apporter.
+
+> Dans la version fusionnée, ce même contrat n'est plus un appel HTTP mais un appel Java
+> (`ExtractionService.extract(octets, requête)`) : **mêmes objets, mêmes règles, mêmes statuts**.
+> C'est précisément parce que les champs et leurs valeurs autorisées voyagent **dans la demande** — et
+> non dans un fichier de configuration du moteur — que le passage d'une forme à l'autre n'a rien coûté.
+
+---
+
+## 🔧 Intégration dans eDoc
+
+```
+Navigateur (Angular)
+   │  l'utilisateur dépose un PDF dans « Nouveau document »
+   ▼
+POST /ocr/prefill                   ← eDoc back-end (port 8080)
+   │  ajoute le code projet, va chercher les valeurs officielles dans Documentum,
+   │  construit la liste des champs configurés pour CE projet
+   ▼
+ExtractionService.extract(...)      ← le moteur, en mémoire
+   │  couche texte du PDF → modèle → paires + rattachements → validation
+   ▼
+le formulaire se remplit, chaque champ coloré selon son statut
+```
+
+**Pourquoi passer par le back-end plutôt que d'appeler le moteur depuis le navigateur ?** Pour que la
+clé d'API reste **côté serveur**, et que l'appel soit protégé par la session eDoc existante.
+
+### Ce qui a été ajouté côté eDoc
+
+| Fichier | Rôle |
+|---|---|
+| `ocr/**` | **le moteur lui-même**, paquet `com.bycnit.socle.ocr` |
+| `web/OcrController.java` | la porte d'entrée `POST /ocr/prefill` |
+| `service/impl/OcrPrefillService.java` | construit la demande, appelle le moteur, traduit la réponse |
+| `dto/Ocr{Prefill,Field,Pair}DTO.java` | les enveloppes de réponse |
+| `_services/ocr.service.ts`, `model/ocr.model.ts` | l'appel côté navigateur |
+| `new-document-sidebar.component.{ts,html}` | déclenche la lecture, remplit, colore les champs |
+
+### Ajouter une valeur de référence depuis le formulaire
+
+Une valeur lue au cartouche mais absente de la liste officielle obligeait l'utilisateur à **quitter
+son dépôt** pour parcourir *Projet → Table de références → Plans → champ → ajouter*, puis à tout
+recommencer.
+
+Elle s'ajoute désormais **sur place**, depuis la liste déroulante. Et quand c'est le moteur qui l'a
+proposée, elle porte un **drapeau jaune** — au survol : « cartouche lu nouvelle valeur a valider ».
+
+### Trois règles de sécurité
+
+- **Le pré-remplissage n'écrit rien.** Il ne fait que **lire** Documentum. La seule écriture du
+  parcours est l'ajout de valeur ci-dessus : déclenchée explicitement, réservée aux rôles habilités,
+  et passant par le service eDoc existant — aucune requête écrite à la main, aucun schéma touché.
+- **Débrayable** (`ocr.enabled: false`) : le formulaire se comporte alors exactement comme avant.
+- **Jamais bloquant.** Si le moteur est indisponible ou lent, l'utilisateur saisit à la main. Une
+  panne de lecture ne doit jamais empêcher un dépôt.
+
+### Le remplissage, côté formulaire
+
+- Seuls les champs **encore vides** sont complétés — le pré-remplissage par nom de fichier existant
+  s'exécute avant et **fait autorité**.
+- Une valeur de liste déroulante n'est posée que si elle **existe vraiment** dans la liste du projet,
+  sinon le champ paraîtrait rempli tout en étant vide.
+- Une date lue au cartouche est **volontairement ignorée** : trop ambiguë pour être posée sans contrôle.
+
+---
+
+## 🏗️ Structure du code
+
+```
+src/main/java/com/bycn/edoc/
+├── ocr/              trouver et lire le cartouche
+├── classification/   ranger chaque paire sur le champ demandé
+├── validation/       vérifier la valeur contre les valeurs officielles
+├── api/              l'API REST appelée par eDoc
+└── config/           lecture du fichier .env
+```
+
+Les fichiers qui comptent, dans `ocr/` :
+
+| Fichier | Rôle |
+|---|---|
+| **`TwoPassCartoucheExtractor`** | **Le chef d'orchestre** — choisit la voie, contrôle le résultat, repart chercher si besoin. **À lire en premier** |
+| `PdfTextLayer` | La voie principale : le texte déjà dans le PDF, mise en page conservée |
+| `PdfSupport` | Dimensions de page et **rendu direct d'une région** (jamais la page entière qu'on découperait) |
+| `CartoucheAnnotationSchema` | Les consignes de lecture — une version texte, une version image |
+| `CartoucheLocationSchema` | La consigne « où est le cartouche ? » (rectangle + rotation) |
+| `OcrClient` | Les appels HTTP : nouvelles tentatives, cache, consensus |
+| `CartouchePlausibility` / `CartoucheScore` | Les garde-fous « est-ce bien un cartouche ? » |
+
+Dans `api/`, **`ExtractionService`** enchaîne les trois métiers et applique les deux garde-fous du
+rattachement.
+
+> [!IMPORTANT]
+> **Règle d'architecture :** le cœur ne manipule que des **`byte[]`**, jamais un chemin de fichier. En
+> production les octets viennent d'un upload — la logique de lecture ne doit pas savoir d'où ils
+> viennent. C'est ce qui a permis de fusionner le moteur dans eDoc sans réécrire une ligne
+> d'extraction.
+
+---
+
+## 📊 Résultats mesurés
+
+Le corpus mélange plusieurs familles de projets : un plan « Palais de Justice » n'a légitimement ni
+Phase, ni Lot, ni Zone. **Compter les champs remplis en moyenne n'a donc aucun sens.** La mesure
+utilisée est celle du vrai défaut :
+
+> un champ laissé **vide** alors qu'une paire lue porte **son libellé** est un **raté de rattachement**.
+
+Elle se calcule automatiquement, **sans vérité terrain** — l'information est dans la réponse elle-même.
+
+| Mesure (28 documents, cache vidé) | Valeur |
+|---|---|
+| Cartouche trouvé et lu | **28 / 28** |
+| **Ratés de rattachement** | **0** (sur cinq passages complets) |
+| Latence médiane | **4,3 s** (contre 9,6 s par l'image) |
+| Documents au-dessus de 20 s | 1 (un scan A0 très dense) |
+| Lus par la couche texte | 20 / 28 |
+| Vérifiés à l'œil (1, 4, 11, 12, 13, 16) | tous les champs exacts |
+
+### Leviers testés puis rejetés par la mesure
+
+<details>
+<summary>À lire avant de proposer une « amélioration »</summary>
+
+| Levier | Pourquoi il a été rejeté |
+|---|---|
+| Baisser la résolution de lecture (3400 → 2400 px) | `13.pdf` refusionne deux cellules (`EMETTEUR = "IDFC 25"`) et décale toute la ligne. **La résolution de lecture n'est pas un levier de latence** : c'est elle qui sépare les cellules d'un tableau serré |
+| Rendu gris / qualité écran pour la lecture | `16.pdf` passe de 13 à 29 paires en faisant remonter un tableau de révisions. Conservé pour la **localisation**, qui ne lit aucun texte |
+| Élargir la zone découpée | L'appariement libellé/valeur s'effondre et de longues valeurs sont tronquées |
+| Détecter l'orientation via la couche texte | Le seul document au cartouche couché est justement celui qui n'a **aucun glyphe** |
+| Donner en indice une liste de champs attendus | Suppression reproductible de champs réels absents de la liste d'indices |
+
+</details>
+
+---
+
+## 🧪 Tests
 
 ```powershell
 mvn test
 ```
 
-Ne touchent pas le réseau : ils vérifient le schéma ouvert, le parsing du `.env`, le contrat de
-requête vers l'endpoint OCR (modèle épinglé, PDF en base64 data-URI, format d'annotation) via
-`MockRestServiceServer`, le découpage d'une région et le contrôle qualité du cartouche.
+**191 tests, tous verts, aucun appel réseau** — donc gratuits et instantanés. `MockRestServiceServer`
+simule le modèle : on vérifie ce qui est *envoyé* sans rien payer.
 
-## Le schéma d'annotation ouvert
+Protocole obligatoire pour tout changement touchant l'extraction :
 
-On ne nomme **aucun** champ métier à l'avance. Le schéma JSON demandé à Mistral est :
-
-```java
-record CartoucheField(String label, String value) {}
-record CartoucheExtraction(boolean cartoucheFound, List<CartoucheField> fields) {}
-```
-
-La classification (ranger chaque paire lue sur un champ cible d'un projet eDoc donné) et la
-validation viendront dans des sessions ultérieures.
-
-## Grands formats (plans A0+) : lecture en deux passes
-
-Mistral redimensionne toute image à une taille fixe. Sur un plan de 2 m, le cartouche (petit, dans
-un coin) devient illisible après ce redimensionnement, et la lecture pleine page renvoie
-`cartoucheFound=false` — alors qu'un A4, même scanné, passe très bien. Les documents dont le grand
-côté dépasse ~430 mm (au-delà de l'A3) sont donc traités en **deux passes** (voir
-`TwoPassCartoucheExtractor`) — c'est la réalisation concrète de la *Stratégie B* décrite plus haut :
-
-1. **Passe 1 — localisation grossière.** On demande à Mistral seulement la *zone* approximative du
-   cartouche (grille 3×3, `CartoucheLocationSchema`), pas son contenu. Le prompt vise explicitement
-   la **boîte-formulaire de codes courts**, pas le titre du plan.
-2. **Passe 2 — extraction plein résolution.** On rend avec PDFBox un découpage généreux (40 %) autour
-   de la zone, à haute résolution (`PdfSupport.renderRegionPng`), et on relance le schéma d'extraction
-   ouvert sur cette **seule image**.
-3. **Contrôle qualité + repli.** Le résultat n'est accepté que s'il *ressemble* à un cartouche
-   (`CartouchePlausibility` : `cartoucheFound`, ≥ 3 paires, ≥ 3 paires « courtes »). Sinon — la passe 1
-   s'est trompée, typiquement en visant le titre — on **replie** sur les autres coins un à un
-   (bas-droite d'abord), en s'arrêtant au premier qui passe le contrôle. Aucun coin n'est figé par
-   défaut : un coin n'est retenu que s'il produit un vrai cartouche.
-
-Diagnostic : la propriété `edoc.force-corner` (ex. `-Dedoc.force-corner=bottom-right`) force la zone
-de découpage et court-circuite la passe 1 + le repli — utile pour isoler « le découpage marche-t-il ? »
-de « la localisation est-elle correcte ? ». Vide en production.
-
-## Fiabilité et latence de l'extraction (consensus, score de coin, vague unique)
-
-**Méthodologie.** Chaque décision de cette section vient d'une **mesure**, jamais d'une supposition :
-réglages rendus configurables, matrice de configurations testées **une variable à la fois** sur un
-panel fixe de 4 documents difficiles, cache vidé pour forcer un vrai appel, comparaison du temps **et**
-du contenu réel des paires extraites (pas seulement leur nombre), et un run isolé sur un document seul
-pour distinguer « trop d'appels à la suite » (throttling de lot) du coût réel d'un appel. Une première
-tentative (découpage en deux vagues réseau, exploration légère puis confirmation) a d'abord été
-adoptée sans cette mesure isolée ; elle s'est révélée, une fois mesurée, deux fois plus lente et moins
-fiable — reprise ci-dessous sous sa forme corrigée. Détail complet, y compris les leviers testés et
-rejetés (résolution réduite, zone de coin réduite), dans `docs/AGENT_CONTEXT.md` §2bis/§2ter.
-
-Constat vérifié sur la référence API Mistral : l'endpoint `/v1/ocr` n'expose **ni `temperature`, ni
-`seed`, ni `random_seed`** — deux requêtes strictement identiques peuvent renvoyer des résultats
-différents (mesuré : `12.pdf` a basculé `cartoucheFound` true→false d'un run à l'autre ; `15.pdf`
-77→19 paires). Impossible de fixer la reproductibilité au niveau de la requête.
-
-**Consensus (`OcrConsensus.java`).** Chaque appel OCR est échantillonné **`mistral.ocr.samples` fois
-en parallèle** (5 par défaut). Le résultat retenu : vote majoritaire sur `cartoucheFound`, puis médiane
-basse du nombre de paires parmi le camp majoritaire — jamais de fusion ni de filtrage de paires, on
-choisit un échantillon réel, verbatim. Le résultat du vote est ce qui est figé dans le cache : un
-document déjà traité ne recoûte rien. Un échantillon dont le JSON est tronqué/malformé est traité
-comme « pas d'extraction » plutôt que de faire échouer tout le document. `mistral.ocr.max-retries`
-(2 par défaut) réessaie avec back-off exponentiel sur 429/503/timeout.
-
-**Score de coin (`CartoucheScore.java`).** Sur `20.pdf`, le panneau des intervenants (adresses,
-téléphones, rôles) passait le contrôle `CartouchePlausibility` — il a bien des lignes courtes remplies
-— mais n'est pas le cartouche. `CartoucheScore` note chaque extraction : bonus pour les libellés
-d'identification (Phase, Indice, Échelle, Lot, N° document...) et les valeurs courtes de type code,
-malus pour les signaux d'adresse/téléphone/e-mail/rôle d'intervenant. Parmi les coins qui passent le
-contrôle qualité, `TwoPassCartoucheExtractor` retient désormais le **meilleur score**, pas le premier
-qui passe — `20.pdf` renvoie maintenant le vrai bloc d'identification.
-
-**Une seule vague réseau, Passe 1 désactivée par défaut.** Mesuré (docs 11/12/16/20, caches vides) :
-le coût dominant est le **temps d'OCR par appel**, proportionnel au volume de texte de l'image envoyée
-— pas le nombre d'appels en soi. La Passe 1 (localisation pleine page) OCRise tout le plan sur un
-document dense : c'était l'appel le plus lent (~40 % du temps total), pour un rôle qui ne sert qu'à
-départager le score entre coins à égalité. Elle a donc été **désactivée par défaut**
-(`mistral.ocr.locate-enabled=false`, réactivable sans changement de code) après avoir vérifié qu'elle
-choisissait le même coin que le score seul sur les documents testés. Les quatre coins candidats sont
-maintenant rendus (CPU) puis analysés (réseau) **tous en même temps**, au lieu d'un balayage séquentiel.
-
-Deux leviers de latence testés et **rejetés sur mesure** : réduire `crop-long-px` (3400→2400) n'a
-donné aucun gain de temps et a dégradé une lecture (`16.pdf` 13→29 paires, lecture confuse) ;
-réduire `corner-fraction` (0.40→0.28) a coupé le cartouche d'un document (`12.pdf`, tous les coins
-vides → `NEEDS_TILING`). Les deux réglages restent à leur valeur d'origine.
-
-Profil de latence livré (mesuré, run isolé) : pages standard ~5-15 s, grands plans ~13-25 s, les trois
-plans A0 les plus denses du corpus ~26-28 s — plancher d'un appel unique à pleine exactitude sur ce
-volume de texte ; descendre en dessous dégrade la lecture plutôt que de l'accélérer (mesuré deux fois).
-
-Réglages exposés (`mistral.ocr.*`, tous surchargeables sans toucher au code) :
-
-| Propriété | Défaut | Rôle |
-|---|---|---|
-| `samples` | 5 | Échantillons par appel (consensus) |
-| `max-retries` | 2 | Nouvelles tentatives sur 429/503/timeout, back-off exponentiel |
-| `crop-long-px` | 3400 | Résolution du découpage de coin envoyé à Mistral |
-| `locate-long-px` | 1400 | Résolution du rendu pleine page pour la Passe 1 |
-| `corner-fraction` | 0.40 | Fraction de page prise depuis chaque coin |
-| `locate-enabled` | false | Active la Passe 1 (départage uniquement ; désactivée par défaut, voir ci-dessus) |
-
-## Structure du code (ÉA1)
-
-```
-src/main/java/com/bycn/edoc
-├─ EdocOcrApplication.java            # main Spring Boot
-├─ config/DotenvEnvironmentPostProcessor.java  # charge .env sans dépendance externe
-├─ ocr/
-│  ├─ MistralOcrProperties.java       # config mistral.ocr.* (modèle épinglé, samples, latence)
-│  ├─ MistralOcrClient.java           # POST /v1/ocr : analyze / locate, échantillonnage parallèle
-│  ├─ OcrConsensus.java               # vote majoritaire sur N échantillons (non-déterminisme)
-│  ├─ CartoucheAnnotationSchema.java  # schéma OUVERT d'extraction + prompt
-│  ├─ CartoucheLocationSchema.java    # schéma de localisation (passe 1, zone)
-│  ├─ TwoPassCartoucheExtractor.java  # orchestration grands formats : vague unique + sélection
-│  ├─ CartouchePlausibility.java      # « ça ressemble à un cartouche ? » (contrôle de forme)
-│  ├─ CartoucheScore.java             # départage entre coins plausibles (contrôle de contenu)
-│  ├─ CropRegion.java                 # zone → rectangle de découpage
-│  ├─ CartoucheField / CartoucheExtraction / CartoucheLocation / OcrResult / CartoucheAnalysis  # records
-│  ├─ PdfSupport.java                 # base64, dimensions, rendu d'une région (PDFBox)
-│  └─ OcrConfig.java                  # câblage des beans
-└─ smoke/SmokeTestRunner.java         # le « test décisif » (profil smoke)
-```
+1. Cache **vidé** — sinon on mesure le cache.
+2. **Corpus complet.** Un panel de 7 documents n'a historiquement rien vu de régressions massives.
+3. Comparer le **contenu** des paires, pas leur nombre (« plus de paires » a déjà signifié « pire »).
+4. Une seule variable à la fois.
+5. Jamais de conclusion sur un seul passage : la latence varie du simple au double.
 
 ---
+
+## ⚠️ Limites connues
+
+1. **Les scans restent lents.** Sans texte dans le fichier, il faut dessiner le PDF (6 à 7 s de CPU
+   sur un A0 chargé) puis faire deux appels. Un document dépasse encore 20 s.
+2. **Le temps de réponse du service varie du simple au double.** Le même document peut mettre 20 s
+   puis 31 s. Ne jamais conclure d'un seul essai.
+3. **Deux lectures identiques ne donnent pas toujours le même résultat.** Le modèle accepte
+   `temperature=0` et `seed`, mais le fournisseur ne garantit rien. Le mécanisme de vote
+   (`ocr.samples`) existe et est prêt ; il est réglé à 1 **par coût**, pas par confiance.
+4. **Les deux seuils de correspondance floue (80 et 85) sont choisis au jugé.** Les calibrer demande
+   une vérité terrain, qui n'existe pas encore. **Ne pas les bouger au hasard pour corriger un cas
+   particulier** : ça déplacerait le problème ailleurs sans qu'on le sache.
+5. **Une couche texte présente n'est pas forcément fiable** (texte invisible, calques). Le contrôle
+   qui déclenche le repli image est volontairement simple : forme de cartouche **et** au moins un
+   libellé demandé.
+
 ---
 
-# Plan de travail (cible)
+## 🗺️ Feuille de route
 
-## Structure du dépôt (cible)
+| Étape | État |
+|---|---|
+| Extraction générique | ✅ |
+| Classification | ✅ |
+| Validation + statuts | ✅ |
+| API REST | ✅ |
+| Intégration eDoc + fusion dans le back-end | ✅ |
+| Ajout d'une valeur de référence depuis le formulaire | ✅ |
+| **P6 — harnais de mesure de précision** | ⏳ bloqué par la vérité terrain |
 
-Découpage conceptuel en modules (indépendant du langage ; réalisé en Java/Spring Boot) :
+**P6** attend `annotations.xlsx` (la bonne valeur de chaque champ pour chaque document). Une fois
+disponible : calibrer les deux seuils, évaluer l'enrichissement de synonymes, et surtout chiffrer le
+**taux d'erreur silencieuse** (`AUTO_VALIDATED` faux) — le risque le plus grave pour l'utilisateur,
+**plus grave qu'un champ vide** : un champ vide se voit, une valeur fausse déjà validée ne se voit pas.
 
-```
-edoc-ocr/
-├── ingestion/     # réception, page 1, orientation
-├── extraction/    # client Mistral OCR, schéma d'annotation, stratégies A/B, cache
-├── validation/    # matching tables de référence, normalisation, statuts
-├── api/           # API REST (Spring Boot), DTO, jobs
-├── evaluation/    # harnais de mesure, métriques
-└── config/
-    ├── schema_fields.(yaml)     # champs + synonymes de libellés
-    ├── thresholds.(yaml)        # seuils de match, pondérations de confiance
-    └── reference_tables/        # tables de référence eDoc (CSV)
-```
+---
 
-**Conventions :** code, commentaires et identifiants en anglais ; documentation en français.
+## 🤝 Reprendre le projet
 
-## Étapes de travail
+- **Le modèle est toujours épinglé** (`gpt-5.5`), jamais un alias glissant : les mesures doivent
+  rester comparables d'un jour à l'autre.
+- **Ne jamais commiter** `.env` (il contient la clé d'API).
+- **Tout changement touchant l'extraction se mesure, jamais ne se suppose** : une variable à la fois,
+  cache vidé, sur le corpus complet.
+- **Une contrainte mesurée sur un outil ne survit pas au changement d'outil.** La règle « il faut
+  découper l'image, sinon le modèle ne lit rien » venait d'un modèle précédent ; reconduite sans être
+  remesurée, elle a orienté l'architecture à tort pendant deux sessions — jusqu'à ce qu'on découvre
+  que 20 documents sur 28 portaient leur cartouche en texte clair dans le fichier.
 
-| Étape | Contenu | Sortie |
-|---|---|---|
-| É1 | Accès Mistral OCR, premier appel ; 2 tests décisifs : doc pivoté à 90° lu ? cartouche A0 lisible en pleine page ? Version du modèle figée | Réponse aux 2 tests |
-| É2 | Réception, page 1, orientation | Corpus traité sans erreur |
-| É3 | Schéma d'annotation + lexique, appel OCR, cache | JSON rempli par document |
-| É4 | Contrôle : matching tables, format numéro, statuts | Sortie complète avec statuts |
-| É5 | Harnais de mesure + QA vérité terrain, run baseline | Précision par champ et par famille |
-| É6 | Amélioration guidée par les chiffres (stratégie B si besoin), 2e run | Précision en hausse mesurée |
-| É7 | API REST (dépôt → résultat champ par champ) | POST/GET fonctionnels |
-| É8 | Rapport + démonstration | Livraison |
+> **Avant d'optimiser la façon de regarder une image, vérifier qu'il faut regarder.**
 
-> **Avancement :** l'incrément **ÉA1** livré ici couvre l'essentiel de É1 et É3 (premier appel OCR,
-> schéma d'annotation ouvert, modèle figé, test décisif) et anticipe la **stratégie B** de É6
-> (lecture en deux passes des grands formats).
+### Ce qui n'est pas dans ce dépôt
 
-## Points à confirmer avec l'encadrant
+Le corpus de test (des plans internes, donc jamais versionnés) et les outils de diagnostic sont dans
+`unecessiry/`. La documentation longue en français est dans `read/1/` : `understand.md` (tout le
+projet expliqué simplement), `howtorun.md`, `instruction.md`, `plan_travail_ocr_edoc.md` et
+`AGENT_CONTEXT.md` (la référence technique dense).
 
-- **Titre4** — présent sur le formulaire, absent du schéma discuté : à extraire ?
-- **Champ Projet** — pré-rempli par le contexte projet : ne vient pas du cartouche (à confirmer).
-- **Indice** — défaut « A » : la valeur lue doit-elle le remplacer ?
-- **Fichier source** — lecture sur la copie PDF quand natif + PDF déposés (à confirmer).
-- **Format du numéro** — convention unique de zéros de tête (« 085 » vs « 000439 »).
-- **Libellés en hypothèse** — Spécialité/Discipline → LOT, Localisation → ZONE, DOC → TYPE : à valider avant activation.
+---
+
+<div align="center">
+
+**PFA — Bouygues Construction IT Maroc**
+Oussama Tabakh · encadrant M. Boumenzeh
+
+</div>
