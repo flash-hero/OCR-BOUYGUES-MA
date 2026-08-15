@@ -128,7 +128,7 @@ Copy-Item .env.example .env      # puis renseigner OCR_API_KEY
 
 ### Configuration
 
-Le fichier `.env` n'est **jamais** commité (il est dans le `.gitignore`).
+Le fichier `.env`.
 
 ```dotenv
 OCR_API_KEY=…
@@ -484,25 +484,6 @@ Protocole obligatoire pour tout changement touchant l'extraction :
 5. **Une couche texte présente n'est pas forcément fiable** (texte invisible, calques). Le contrôle
    qui déclenche le repli image est volontairement simple : forme de cartouche **et** au moins un
    libellé demandé.
-
----
-
-## 🗺️ Feuille de route
-
-| Étape | État |
-|---|---|
-| Extraction générique | ✅ |
-| Classification | ✅ |
-| Validation + statuts | ✅ |
-| API REST | ✅ |
-| Intégration eDoc + fusion dans le back-end | ✅ |
-| Ajout d'une valeur de référence depuis le formulaire | ✅ |
-| **P6 — harnais de mesure de précision** | ⏳ bloqué par la vérité terrain |
-
-**P6** attend `annotations.xlsx` (la bonne valeur de chaque champ pour chaque document). Une fois
-disponible : calibrer les deux seuils, évaluer l'enrichissement de synonymes, et surtout chiffrer le
-**taux d'erreur silencieuse** (`AUTO_VALIDATED` faux) — le risque le plus grave pour l'utilisateur,
-**plus grave qu'un champ vide** : un champ vide se voit, une valeur fausse déjà validée ne se voit pas.
 
 ---
 
